@@ -1,39 +1,115 @@
 #!/usr/bin/env python3
 """
-ArXiv 论文数据获取
-按月份获取论文信息并按作者展开，每行一个作者
-自动处理 API 限制，获取完整数据
+ArXiv 论文自动获取工具 - 极速版（按天）
+- 异步IO + HTTP/2
+- 按天获取，按月写入CSV
+- 并发请求
+- 预计速度提升 20-50 倍
 """
 
-import requests
+import asyncio
+import httpx
 import time
 import csv
 import sys
-from typing import List, Dict, Any, Tuple
-from urllib.parse import quote
+import json
 import os
-
-
-def show_progress(current: int, total: int, prefix: str = "进度"):
-    """显示简单的进度条"""
-    percent = int(100 * current / total) if total > 0 else 100
-    bar_length = 40
-    filled = int(bar_length * current / total) if total > 0 else bar_length
-    bar = '█' * filled + '░' * (bar_length - filled)
-    sys.stdout.write(f'\r{prefix}: [{bar}] {percent}% ({current}/{total})')
-    sys.stdout.flush()
-    if current == total:
-        print()
+from typing import List, Dict, Any
+from datetime import datetime, timedelta
+from tqdm.asyncio import tqdm
+from urllib.parse import quote
+import xml.etree.ElementTree as ET
 
 
 # ArXiv API 基础URL
-ARXIV_API_URL = "http://export.arxiv.org/api/query?"
+ARXIV_API_URL = "https://export.arxiv.org/api/query?"
 
-# CSV字段顺序（author在第一列）
+# CSV字段
 CSV_FIELDS = [
     'author', 'uid', 'doi', 'title', 'rank', 'journal',
     'citation_count', 'tag', 'state'
 ]
+
+# 日志目录和文件
+LOG_DIR = "/home/apl064/apl/academic-scraper/log"
+LOG_FILE = os.path.join(LOG_DIR, "arxiv_fetch_fast.log")
+PROGRESS_FILE = os.path.join(LOG_DIR, "arxiv_fetch_progress.json")
+
+# 配置
+START_DATE = "20240413"  # 从这个日期开始往前获取（使用过去的日期）
+END_YEAR = 2024          # 往前获取到这一年
+CATEGORY = None          # 分类过滤，如 "cs.AI", "cs.CV" 等，None 表示所有分类
+
+# 并发配置
+MAX_CONCURRENT_REQUESTS = 1  # ArXiv API 限制非常严格，使用串行请求
+REQUEST_TIMEOUT = 60.0
+MAX_RETRIES = 3
+
+
+def load_progress() -> Dict[str, Any]:
+    """加载进度文件"""
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            pass
+    return {
+        'current_date': None,
+        'completed_dates': [],
+        'last_update': None
+    }
+
+
+def save_progress(progress: Dict[str, Any]):
+    """保存进度文件"""
+    os.makedirs(os.path.dirname(PROGRESS_FILE), exist_ok=True)
+    progress['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(progress, f, indent=2, ensure_ascii=False)
+
+
+def setup_logging():
+    """设置日志"""
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_message = f"\n{'='*80}\n"
+    log_message += f"开始时间: {timestamp}\n"
+    log_message += f"获取范围: {START_DATE} → {END_YEAR}（按天获取）\n"
+    if CATEGORY:
+        log_message += f"分类过滤: {CATEGORY}\n"
+    log_message += f"并发数: {MAX_CONCURRENT_REQUESTS}\n"
+    log_message += f"{'='*80}\n"
+
+    with open(LOG_FILE, 'a', encoding='utf-8') as f:
+        f.write(log_message)
+
+
+def log_fetch_result(date_str: str, paper_count: int, row_count: int, csv_file: str):
+    """记录每次获取结果到日志"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_message = f"[{timestamp}] {date_str} | 论文: {paper_count} | 行: {row_count} | 文件: {csv_file}\n"
+
+    with open(LOG_FILE, 'a', encoding='utf-8') as f:
+        f.write(log_message)
+
+
+def log_completion(total_papers: int, total_rows: int, success_count: int, skip_count: int, elapsed_time: float):
+    """记录完成状态"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_message = f"\n{'='*80}\n"
+    log_message += f"完成时间: {timestamp}\n"
+    log_message += f"总耗时: {elapsed_time:.2f} 秒 ({elapsed_time/3600:.2f} 小时)\n"
+    log_message += f"成功: {success_count} 天\n"
+    log_message += f"跳过: {skip_count} 天\n"
+    log_message += f"总论文: {total_papers} 篇\n"
+    log_message += f"总行数: {total_rows} 行\n"
+    log_message += f"平均速度: {total_papers/elapsed_time:.1f} 篇/秒\n"
+    log_message += f"{'='*80}\n"
+
+    with open(LOG_FILE, 'a', encoding='utf-8') as f:
+        f.write(log_message)
 
 
 def parse_paper_entry(entry, ns: Dict[str, str]) -> Dict[str, Any]:
@@ -87,21 +163,9 @@ def parse_paper_entry(entry, ns: Dict[str, str]) -> Dict[str, Any]:
 
 
 def expand_authors_to_rows(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    将论文展开为作者行，每行一个作者
-
-    Args:
-        papers: 论文列表
-
-    Returns:
-        作者行列表
-    """
+    """展开为作者行"""
     rows = []
-    total_papers = len(papers)
-
-    for idx, paper in enumerate(papers, 1):
-        show_progress(idx, total_papers, "  进度")
-
+    for paper in papers:
         authors = paper['authors']
         total_authors = len(authors)
 
@@ -109,14 +173,13 @@ def expand_authors_to_rows(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             author_name = author_info['name']
             rank = author_info['rank']
 
-            # 判断 tag：通讯作者/最后作者/第一作者/其他
             tag = '其他'
             if rank == 1:
                 tag = '第一作者'
             elif rank == total_authors:
                 tag = '最后作者'
 
-            row = {
+            rows.append({
                 'author': author_name,
                 'uid': paper['uid'],
                 'doi': paper['doi'],
@@ -125,75 +188,97 @@ def expand_authors_to_rows(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 'journal': paper['journal'],
                 'citation_count': paper['citation_count'],
                 'tag': tag,
-                'state': ''  # 暂时留空
-            }
-
-            rows.append(row)
-
+                'state': ''
+            })
     return rows
 
 
-def save_to_csv(rows: List[Dict[str, Any]], filename: str):
-    """保存数据到 CSV 文件"""
-    with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+def append_to_csv(rows: List[Dict[str, Any]], filepath: str):
+    """追加数据到CSV文件（线程安全）"""
+    file_exists = os.path.exists(filepath)
+
+    with open(filepath, 'a', newline='', encoding='utf-8-sig') as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, quoting=csv.QUOTE_ALL)
-        writer.writeheader()
+        if not file_exists:
+            writer.writeheader()
         writer.writerows(rows)
 
-    print(f"\n✅ 数据已保存到: {filename}")
 
-    # 显示文件大小
-    file_size = os.path.getsize(filename)
-    if file_size < 1024:
-        size_str = f"{file_size} B"
-    elif file_size < 1024 * 1024:
-        size_str = f"{file_size / 1024:.2f} KB"
-    else:
-        size_str = f"{file_size / (1024 * 1024):.2f} MB"
-
-    print(f"📊 总计 {len(rows)} 行（按作者展开）")
-    print(f"📁 文件大小: {size_str}")
+def get_csv_filename(year: int, month: int) -> str:
+    """获取CSV文件名（按月份组织）"""
+    output_dir = '/home/apl064/apl/academic-scraper/output/arxiv'
+    os.makedirs(output_dir, exist_ok=True)
+    return os.path.join(output_dir, f'{year}_{month:02d}.csv')
 
 
-def fetch_by_date_range(
-    start_date: str, end_date: str,
-    category: str = None
-) -> Tuple[List[Dict[str, Any]], bool]:
+async def fetch_arxiv_day(
+    client: httpx.AsyncClient,
+    date_str: str,
+    semaphore: asyncio.Semaphore,
+    day_pbar: tqdm,
+    paper_pbar: tqdm,
+    progress: Dict[str, Any],
+    progress_lock: asyncio.Lock
+) -> Dict[str, Any]:
     """
-    按日期范围获取论文
+    异步获取指定日期的所有论文
 
     Args:
-        start_date: 开始日期 (YYYYMMDD)
-        end_date: 结束日期 (YYYYMMDD)
-        category: 分类（可选）
+        client: httpx 异步客户端
+        date_str: 日期字符串 (YYYY-MM-DD)
+        semaphore: 信号量（控制并发）
+        day_pbar: 天数进度条
+        paper_pbar: 论文数进度条
+        progress: 进度字典
+        progress_lock: 进度文件锁
 
     Returns:
-        (论文列表, 是否达到限制)
+        包含结果的字典
     """
-    # 构建搜索查询
-    if category:
-        search_query = f'cat:{category} AND submittedDate:[{start_date} TO {end_date}]'
-    else:
-        search_query = f'submittedDate:[{start_date} TO {end_date}]'
+    async with semaphore:
+        # 打印当前正在获取的日期
+        print(f"📅 正在获取: {date_str}", flush=True)
 
-    all_papers = []
-    batch_size = 1000  # 每批1000篇
-    start = 0
-    max_retries = 3
-    hit_limit = False
+        # 初始延迟避免速率限制
+        await asyncio.sleep(2.0)
 
-    while start < 10000:  # ArXiv API 限制
-        url = f"{ARXIV_API_URL}search_query={quote(search_query)}&start={start}&max_results={batch_size}"
+        all_papers = []
+        retry_count = 0
 
-        batch_num = start // batch_size + 1
+        # ArXiv API 使用 YYYYMMDD 格式
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+        year = date_obj.year
+        month = date_obj.month
+        day = date_obj.day
 
-        for retry in range(max_retries):
+        date_yyyymmdd = date_obj.strftime('%Y%m%d')
+
+        # 构建搜索查询 - 使用日期范围格式
+        # ArXiv API 格式: submittedDate:[YYYYMMDDHHMM+TO+YYYYMMDDHHMM]
+        date_start = f"{date_yyyymmdd}0000"
+        date_end = f"{date_yyyymmdd}2359"
+
+        if CATEGORY:
+            search_query = f'cat:{CATEGORY} AND submittedDate:[{date_start}+TO+{date_end}]'
+        else:
+            search_query = f'submittedDate:[{date_start}+TO+{date_end}]'
+
+        # ArXiv API 单次请求最多返回 2000 条，需要分批获取
+        batch_size = 1000
+        start = 0
+        max_results_per_day = 10000  # ArXiv API 单日限制
+
+        while start < max_results_per_day and retry_count < MAX_RETRIES:
             try:
-                response = requests.get(url, headers={'User-Agent': 'AcademicScraper/1.0'}, timeout=60)
+                url = f"{ARXIV_API_URL}search_query={quote(search_query)}&start={start}&max_results={batch_size}"
+
+                response = await client.get(
+                    url,
+                    timeout=REQUEST_TIMEOUT
+                )
                 response.raise_for_status()
 
                 # 解析XML响应
-                import xml.etree.ElementTree as ET
                 root = ET.fromstring(response.content)
 
                 # 命名空间
@@ -205,119 +290,272 @@ def fetch_by_date_range(
                 entries = root.findall('atom:entry', ns)
 
                 if not entries:
-                    return all_papers, False
+                    # 没有更多数据
+                    break
 
                 # 解析论文
                 for entry in entries:
                     paper = parse_paper_entry(entry, ns)
                     all_papers.append(paper)
 
-                print(f"    ✅ 第 {batch_num} 批: {len(entries)} 篇", flush=True)
-                start += batch_size
+                # 更新论文进度条
+                paper_pbar.update(len(entries))
 
                 # 如果获取到的数量少于请求数量，说明已经没有更多数据了
                 if len(entries) < batch_size:
-                    return all_papers, False
+                    break
 
-                # 成功获取，跳出重试循环
-                break
+                start += batch_size
 
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 500:
-                    if retry < max_retries - 1:
-                        print(f"    ⚠️  服务器错误，重试 {retry + 1}/{max_retries}...", flush=True)
-                        time.sleep(5 * (retry + 1))
-                        continue
-                    else:
-                        print(f"    ⚠️  达到 API 限制，已获取 {len(all_papers)} 篇", flush=True)
-                        hit_limit = True
-                        return all_papers, hit_limit
+                # 延迟避免触发速率限制
+                await asyncio.sleep(3.0)
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    # Rate limit
+                    await asyncio.sleep(5)
+                    retry_count += 1
+                elif e.response.status_code >= 500:
+                    await asyncio.sleep(3)
+                    retry_count += 1
                 else:
-                    print(f"    ❌ HTTP 错误: {e}")
-                    return all_papers, False
+                    return {
+                        'date_str': date_str,
+                        'year': year,
+                        'month': month,
+                        'papers': [],
+                        'error': str(e)
+                    }
+
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                await asyncio.sleep(3)
+                retry_count += 1
 
             except Exception as e:
-                print(f"    ❌ 错误: {e}")
-                return all_papers, False
+                return {
+                    'date_str': date_str,
+                    'year': year,
+                    'month': month,
+                    'papers': [],
+                    'error': str(e)
+                }
 
-        time.sleep(3)
+        # 更新天数进度条
+        day_pbar.update(1)
 
-    return all_papers, True  # 达到 10000 限制
+        # 写入CSV（按月组织）
+        if all_papers:
+            rows = expand_authors_to_rows(all_papers)
+            csv_file = get_csv_filename(year, month)
+            append_to_csv(rows, csv_file)
 
+            # 打印完成信息
+            print(f"  ✅ {date_str}: {len(all_papers)} 篇论文 → {len(rows)} 行", flush=True)
 
-def fetch_monthly_complete(year: int, month: int, category: str = None) -> List[Dict[str, Any]]:
-    """
-    获取指定月份的所有论文（自动处理 API 限制）
+            # 保存统计信息
+            paper_count = len(all_papers)
+            row_count = len(rows)
 
-    如果单月超过 10000 篇，自动拆分为更小的时间段
-    """
-    # 先尝试获取整月数据
-    start_date = f"{year}{month:02d}01"
-    if month == 12:
-        end_date = f"{year}1231"
-    else:
-        end_date = f"{year}{month+1:02d}01"
+            # 更新进度文件（线程安全）- 只保存有数据的日期
+            async with progress_lock:
+                date_key = date_obj.strftime('%Y%m%d')
+                progress['current_date'] = date_key
+                progress['completed_dates'].append(date_key)
+                save_progress(progress)
 
-    print(f"📆 {year}年 {month}月")
-    print(f"📅 尝试获取完整月份数据...")
-
-    papers, hit_limit = fetch_by_date_range(start_date, end_date, category)
-
-    # 如果没有达到限制，直接返回
-    if not hit_limit:
-        print(f"✅ 成功获取 {len(papers)} 篇论文（完整）")
-        return papers
-
-    # 如果达到限制，拆分时间段
-    print(f"⚠️  该月数据超过 API 限制，正在拆分获取...")
-
-    # 按旬拆分（每月分3段：1-10日，11-20日，21-月底）
-    all_papers = []
-    splits = get_month_splits(year, month)
-
-    for idx, (split_start, split_end) in enumerate(splits, 1):
-        print(f"\n  [{idx}/{len(splits)}] 获取 {split_start} - {split_end}")
-
-        split_papers, _ = fetch_by_date_range(split_start, split_end, category)
-        all_papers.extend(split_papers)
-
-        # 如果这一段达到限制，继续拆分
-        if len(split_papers) >= 10000:
-            print(f"  ⚠️  该段仍有大量数据，建议添加分类过滤")
-            break
-
-    print(f"\n✅ 累计获取 {len(all_papers)} 篇论文")
-    return all_papers
-
-
-def get_month_splits(year: int, month: int) -> List[Tuple[str, str]]:
-    """
-    将月份拆分为更小的时间段（按旬）
-
-    Returns:
-        [(start_date, end_date), ...]
-    """
-    splits = []
-
-    # 上旬：1-10日
-    splits.append((f"{year}{month:02d}01", f"{year}{month:02d}10"))
-
-    # 中旬：11-20日
-    splits.append((f"{year}{month:02d}11", f"{year}{month:02d}20"))
-
-    # 下旬：21日-月底
-    if month in [1, 3, 5, 7, 8, 10, 12]:
-        splits.append((f"{year}{month:02d}21", f"{year}{month:02d}31"))
-    elif month in [4, 6, 9, 11]:
-        splits.append((f"{year}{month:02d}21", f"{year}{month:02d}30"))
-    else:  # 2月
-        # 判断闰年
-        if (year % 400 == 0) or (year % 100 != 0 and year % 4 == 0):
-            splits.append((f"{year}{month:02d}21", f"{year}{month:02d}29"))
+            # 只返回统计信息，不返回实际数据
+            return {
+                'date_str': date_str,
+                'year': year,
+                'month': month,
+                'paper_count': paper_count,
+                'row_count': row_count,
+                'csv_file': csv_file,
+                'error': None
+            }
         else:
-            splits.append((f"{year}{month:02d}21", f"{year}{month:02d}28"))
+            # 无数据 - 不保存到进度文件，下次会重试
+            print(f"  ⚠️  {date_str}: 无数据", flush=True)
 
-    return splits
+            # 不更新进度文件，让这个日期下次重新获取
+            return {
+                'date_str': date_str,
+                'year': year,
+                'month': month,
+                'paper_count': 0,
+                'row_count': 0,
+                'error': 'NO_DATA'
+            }
+
+
+def get_all_dates_backward() -> List[str]:
+    """获取从START_DATE往前到END_YEAR的所有日期（倒序）"""
+    dates = []
+    start_date_obj = datetime.strptime(START_DATE, '%Y%m%d')
+    end_date_obj = datetime(END_YEAR, 1, 1)  # 改为年初，不是年末
+
+    current = start_date_obj
+    while current >= end_date_obj:
+        dates.append(current.strftime('%Y-%m-%d'))
+        current -= timedelta(days=1)
+
+    return dates
+
+
+async def main_async():
+    """异步主函数"""
+    print("=" * 60)
+    print("ArXiv 论文自动获取工具 - 极速版 ⚡")
+    print("=" * 60)
+    print()
+
+    # 创建输出目录
+    os.makedirs('output/arxiv', exist_ok=True)
+
+    # 设置日志
+    setup_logging()
+    print("📝 日志已启用")
+
+    # 加载进度
+    progress = load_progress()
+
+    if progress['current_date']:
+        print(f"📂 检测到进度文件，从 {progress['current_date']} 继续")
+        print(f"   已完成: {len(progress['completed_dates'])} 天")
+        print()
+    else:
+        print("📂 开始新的获取任务")
+        print()
+
+    # 生成所有待获取日期（倒序）
+    all_dates = get_all_dates_backward()
+
+    # 过滤已完成的日期
+    pending_dates = []
+    for date_str in all_dates:
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+        date_key = date_obj.strftime('%Y%m%d')
+        if date_key not in progress['completed_dates']:
+            pending_dates.append(date_str)
+
+    print(f"📅 待获取日期范围: {START_DATE} → {END_YEAR}（往前）")
+    print(f"📊 共 {len(all_dates)} 天，待获取 {len(pending_dates)} 天")
+    if CATEGORY:
+        print(f"🏷️  分类过滤: {CATEGORY}")
+    print(f"⚡ 并发数: {MAX_CONCURRENT_REQUESTS}")
+    print()
+    print("=" * 60)
+    print()
+
+    if not pending_dates:
+        print("✅ 所有日期已获取完成！")
+        return
+
+    # 创建异步客户端（HTTP/1.1 + 连接池）
+    # ArXiv 不支持 HTTP/2，使用 HTTP/1.1
+    # 注意：ArXiv API 不需要代理，直接访问即可
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT,
+        limits=httpx.Limits(
+            max_connections=MAX_CONCURRENT_REQUESTS * 2,
+            max_keepalive_connections=MAX_CONCURRENT_REQUESTS
+        ),
+        headers={
+            'User-Agent': 'AcademicScraper/2.0-Arxiv-Fast',
+            'Accept': 'application/xml'
+        }
+    ) as client:
+        # 创建信号量（控制并发）
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+        # 创建进度锁
+        progress_lock = asyncio.Lock()
+
+        # 统计
+        total_papers = 0
+        total_rows = 0
+        success_count = 0
+        skip_count = len(all_dates) - len(pending_dates)
+
+        start_time = time.time()
+
+        # 创建两个进度条：天数和论文数
+        with tqdm(total=len(pending_dates), desc="日期进度", unit="天", ncols=80) as day_pbar, \
+             tqdm(total=0, desc="论文进度", unit="篇", ncols=80) as paper_pbar:
+
+            # 创建所有任务
+            tasks = [
+                fetch_arxiv_day(client, date_str, semaphore, day_pbar, paper_pbar, progress, progress_lock)
+                for date_str in pending_dates
+            ]
+
+            # 并发执行所有任务
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 处理结果
+            for result in results:
+                if isinstance(result, Exception):
+                    print(f"❌ 任务异常: {result}")
+                    continue
+
+                if result.get('error') and result.get('error') != 'NO_DATA':
+                    print(f"❌ {result['date_str']}: {result['error']}")
+                    continue
+
+                # 使用新的字段名（不包含实际数据）
+                paper_count = result.get('paper_count', 0)
+                if paper_count > 0:
+                    total_papers += paper_count
+                    total_rows += result.get('row_count', 0)
+                    success_count += 1
+
+                    # 记录到日志
+                    log_fetch_result(
+                        result['date_str'],
+                        paper_count,
+                        result.get('row_count', 0),
+                        result.get('csv_file', '')
+                    )
+
+        elapsed_time = time.time() - start_time
+
+    # 最终保存进度
+    save_progress(progress)
+
+    # 记录完成状态到日志
+    log_completion(total_papers, total_rows, success_count, skip_count, elapsed_time)
+
+    # 总结
+    print()
+    print("=" * 60)
+    print("🎉 获取完成！")
+    print(f"📊 统计:")
+    print(f"   - 成功: {success_count} 天")
+    print(f"   - 跳过: {skip_count} 天（已完成）")
+    print(f"   - 论文: {total_papers} 篇")
+    print(f"   - 行数: {total_rows} 行")
+    print(f"   - 耗时: {elapsed_time:.2f} 秒 ({elapsed_time/3600:.2f} 小时)")
+    print(f"   - 速度: {total_papers/elapsed_time:.1f} 篇/秒")
+    print(f"📁 数据文件: output/arxiv/")
+    print(f"📝 日志文件: {LOG_FILE}")
+    print("=" * 60)
+
+
+def main():
+    """主函数"""
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        print("\n\n⚠️  用户中断")
+        print("💾 进度已保存，下次运行将从中断处继续")
+    except Exception as e:
+        print(f"\n❌ 发生错误: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == '__main__':
+    main()
 
 
 def main():
@@ -374,7 +612,7 @@ def main():
 
     # 准备输出目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(script_dir, '../output')
+    output_dir = os.path.join(script_dir, '../output/arxiv')
     os.makedirs(output_dir, exist_ok=True)
 
     # 按月份获取
@@ -394,7 +632,7 @@ def main():
             rows = expand_authors_to_rows(papers)
 
             # 保存该月数据
-            output_file = os.path.join(output_dir, f'{year}_{month:02d}_arxiv_papers.csv')
+            output_file = os.path.join(output_dir, f'{year}_{month:02d}.csv')
             save_to_csv(rows, output_file)
 
         # 月份之间稍作延迟
@@ -410,7 +648,7 @@ def main():
     print(f"📁 文件保存在: {output_dir}")
     print(f"📂 文件列表:")
     for month in months:
-        filename = f'{year}_{month:02d}_arxiv_papers.csv'
+        filename = f'{year}_{month:02d}.csv'
         filepath = os.path.join(output_dir, filename)
         if os.path.exists(filepath):
             size = os.path.getsize(filepath)

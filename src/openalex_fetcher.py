@@ -14,6 +14,7 @@ import csv
 import sys
 import json
 import os
+import gc
 from typing import List, Dict, Any
 from datetime import datetime, timedelta
 from tqdm.asyncio import tqdm
@@ -22,9 +23,13 @@ from tqdm.asyncio import tqdm
 # OpenAlex API 基础URL
 OPENALEX_API_BASE = "https://api.openalex.org"
 
+# API 配置
+OPENALEX_API_KEY = "zF5B0bERxfXCZsPF1P5TiY"  # 您的 API Key
+OPENALEX_EMAIL = "13360197039@163.com"  # 您的邮箱
+
 # CSV字段
 CSV_FIELDS = [
-    'author', 'uid', 'doi', 'title', 'rank', 'journal',
+    'author_id', 'author', 'uid', 'doi', 'title', 'rank', 'journal',
     'citation_count', 'tag', 'state'
 ]
 
@@ -38,7 +43,7 @@ START_DATE = "20260410"  # 从这个日期开始往前获取
 END_YEAR = 2010          # 往前获取到这一年
 
 # 并发配置
-MAX_CONCURRENT_REQUESTS = 20  # 最大并发请求数
+MAX_CONCURRENT_REQUESTS = 20  # 最大并发请求数（降低以减少内存占用）
 REQUEST_TIMEOUT = 60.0
 MAX_RETRIES = 3
 
@@ -126,8 +131,16 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
     for idx, auth in enumerate(authorships):
         author_info = auth.get('author', {})
         if author_info and author_info.get('display_name'):
+            # 提取 author ID (格式: https://openalex.org/A1234567890)
+            author_id = author_info.get('id', '')
+            # 只保留数字部分
+            if author_id and '/A' in author_id:
+                author_id = author_id.split('/A')[-1]
+
             authors.append({
+                'id': author_id,  # OpenAlex Author ID
                 'name': author_info['display_name'],
+                'orcid': author_info.get('orcid', ''),
                 'rank': idx + 1
             })
 
@@ -154,45 +167,19 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def expand_authors_to_rows(papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """展开为作者行"""
-    rows = []
-    for paper in papers:
-        authors = paper['authors']
-        total_authors = len(authors)
-
-        for author_info in authors:
-            author_name = author_info['name']
-            rank = author_info['rank']
-
-            tag = '其他'
-            if rank == 1:
-                tag = '第一作者'
-            elif rank == total_authors:
-                tag = '最后作者'
-
-            rows.append({
-                'author': author_name,
-                'uid': paper['uid'],
-                'doi': paper['doi'],
-                'title': paper['title'],
-                'rank': rank,
-                'journal': paper['journal'],
-                'citation_count': paper['citation_count'],
-                'tag': tag,
-                'state': ''
-            })
-    return rows
-
-
-def append_to_csv(rows: List[Dict[str, Any]], filepath: str):
-    """追加数据到CSV文件（线程安全）"""
+def append_rows_to_csv(rows: List[Dict[str, Any]], filepath: str):
+    """
+    追加行数据到CSV文件
+    每天一个文件，无需考虑并发冲突（不同天写不同文件）
+    """
     file_exists = os.path.exists(filepath)
 
     with open(filepath, 'a', newline='', encoding='utf-8-sig') as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, quoting=csv.QUOTE_ALL)
         if not file_exists:
             writer.writeheader()
+
+        # 一次性写入所有行
         writer.writerows(rows)
 
 
@@ -206,7 +193,12 @@ async def fetch_openalex_day(
     progress_lock: asyncio.Lock
 ) -> Dict[str, Any]:
     """
-    异步获取指定日期的所有论文
+    异步获取指定日期的所有论文（优化版：分批写入，及时释放内存）
+
+    优化策略：
+    1. 每累积 20,000 条论文记录就写入并清空
+    2. 每天写入独立文件，避免锁竞争
+    3. 文件组织：output/openalex/YYYY_MM/YYYY-MM-DD.csv
 
     Args:
         client: httpx 异步客户端
@@ -221,7 +213,6 @@ async def fetch_openalex_day(
         包含结果的字典
     """
     async with semaphore:
-        # 打印当前正在获取的日期
         print(f"📅 正在获取: {date_str}", flush=True)
 
         all_papers = []
@@ -230,16 +221,23 @@ async def fetch_openalex_day(
         retry_count = 0
 
         date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-        year = date_obj.year
-        month = date_obj.month
-        day = date_obj.day
+        csv_file = get_daily_csv_filename(date_str)  # 获取每日CSV文件路径
+
+        # 统计信息
+        total_papers = 0
+        total_rows = 0
+        write_count = 0  # 写入次数统计
+
+        # 分批写入阈值（论文数）
+        BATCH_WRITE_THRESHOLD = 9000
 
         while retry_count < MAX_RETRIES:
             try:
                 params = {
-                    'filter': f'from_publication_date:{date_str},to_publication_date:{date_str}',
+                    'filter': f'from_publication_date:{date_str},to_publication_date:{date_str},type:article',
                     'per-page': per_page,
-                    'cursor': cursor
+                    'cursor': cursor,
+                    'api_key': OPENALEX_API_KEY
                 }
 
                 response = await client.get(
@@ -255,13 +253,63 @@ async def fetch_openalex_day(
                 if not results:
                     break
 
-                # 解析论文
+                # 解析论文并添加到当前批次
                 for work in results:
                     paper = parse_openalex_work(work)
                     all_papers.append(paper)
 
                 # 更新论文进度条
                 paper_pbar.update(len(results))
+
+                # ✅ 关键优化：每累积 20,000 条就写入并清空
+                if len(all_papers) >= BATCH_WRITE_THRESHOLD:
+                    # 展开为作者行
+                    rows = []
+                    for paper in all_papers:
+                        authors = paper['authors']
+                        total_authors = len(authors)
+
+                        for author_info in authors:
+                            author_id = author_info.get('id', '')
+                            author_name = author_info['name']
+                            rank = author_info['rank']
+
+                            tag = '其他'
+                            if rank == 1:
+                                tag = '第一作者'
+                            elif rank == total_authors:
+                                tag = '最后作者'
+
+                            rows.append({
+                                'author_id': author_id,
+                                'author': author_name,
+                                'uid': paper['uid'],
+                                'doi': paper['doi'],
+                                'title': paper['title'],
+                                'rank': rank,
+                                'journal': paper['journal'],
+                                'citation_count': paper['citation_count'],
+                                'tag': tag,
+                                'state': ''
+                            })
+
+                    # 写入CSV
+                    append_rows_to_csv(rows, csv_file)
+
+                    # 更新统计
+                    total_papers += len(all_papers)
+                    total_rows += len(rows)
+                    write_count += 1
+
+                    print(f"  💾 [{write_count}] {date_str}: 已写入 {len(all_papers)} 篇论文 → {len(rows)} 行", flush=True)
+
+                    # ✅ 立即释放内存
+                    del all_papers
+                    del rows
+                    gc.collect()
+
+                    # 重新初始化，继续获取
+                    all_papers = []
 
                 # 检查是否还有更多结果
                 meta = data.get('meta', {})
@@ -270,33 +318,25 @@ async def fetch_openalex_day(
                     break
 
                 cursor = next_cursor
-
-                # 小延迟避免过载
                 await asyncio.sleep(0.05)
 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
-                    # Rate limit - 检查响应内容
                     try:
                         error_data = e.response.json()
                         if 'Rate limit exceeded' in error_data.get('error', ''):
-                            # API配额耗尽，立即停止
                             print(f"\n❌ API配额耗尽！")
                             print(f"   {error_data.get('message', '')}")
                             print(f"   重置时间: {error_data.get('retryAfter', 'N/A')} 秒后")
                             print(f"   💾 进度已保存，请等待配额重置后继续")
                             return {
                                 'date_str': date_str,
-                                'year': year,
-                                'month': month,
-                                'papers': [],
                                 'error': 'RATE_LIMIT_EXCEEDED',
-                                'fatal': True  # 标记为致命错误
+                                'fatal': True
                             }
                     except:
                         pass
 
-                    # 等待后重试
                     await asyncio.sleep(5)
                     retry_count += 1
                 elif e.response.status_code >= 500:
@@ -305,9 +345,6 @@ async def fetch_openalex_day(
                 else:
                     return {
                         'date_str': date_str,
-                        'year': year,
-                        'month': month,
-                        'papers': [],
                         'error': str(e)
                     }
 
@@ -318,58 +355,80 @@ async def fetch_openalex_day(
             except Exception as e:
                 return {
                     'date_str': date_str,
-                    'year': year,
-                    'month': month,
-                    'papers': [],
                     'error': str(e)
                 }
 
         # 更新天数进度条
         day_pbar.update(1)
 
-        # 写入CSV（按月组织）
+        # ✅ 处理剩余的论文（不足 20,000 条的部分）
         if all_papers:
-            rows = expand_authors_to_rows(all_papers)
-            csv_file = get_csv_filename(year, month)
-            append_to_csv(rows, csv_file)
+            # 展开为作者行
+            rows = []
+            for paper in all_papers:
+                authors = paper['authors']
+                total_authors = len(authors)
 
-            # 打印完成信息
-            print(f"  ✅ {date_str}: {len(all_papers)} 篇论文 → {len(rows)} 行", flush=True)
+                for author_info in authors:
+                    author_id = author_info.get('id', '')
+                    author_name = author_info['name']
+                    rank = author_info['rank']
 
-            # ✅ 保存统计信息（在函数返回前）
-            paper_count = len(all_papers)
-            row_count = len(rows)
+                    tag = '其他'
+                    if rank == 1:
+                        tag = '第一作者'
+                    elif rank == total_authors:
+                        tag = '最后作者'
 
-            # ✅ all_papers 和 rows 是局部变量，函数结束后自动被GC回收
-            # 关键：不要在返回值中包含这些大数据
+                    rows.append({
+                        'author_id': author_id,
+                        'author': author_name,
+                        'uid': paper['uid'],
+                        'doi': paper['doi'],
+                        'title': paper['title'],
+                        'rank': rank,
+                        'journal': paper['journal'],
+                        'citation_count': paper['citation_count'],
+                        'tag': tag,
+                        'state': ''
+                    })
 
-            # 更新进度文件（线程安全）- 只保存有数据的日期
+            # 写入CSV
+            append_rows_to_csv(rows, csv_file)
+
+            # 更新统计
+            total_papers += len(all_papers)
+            total_rows += len(rows)
+            write_count += 1
+
+            # 释放内存
+            del all_papers
+            del rows
+            gc.collect()
+
+        # 打印完成信息
+        if total_papers > 0:
+            print(f"  ✅ {date_str}: 完成！共 {total_papers} 篇论文 → {total_rows} 行 (分 {write_count} 批写入)", flush=True)
+
+            # 更新进度文件
             async with progress_lock:
                 date_key = date_obj.strftime('%Y%m%d')
                 progress['current_date'] = date_key
                 progress['completed_dates'].append(date_key)
                 save_progress(progress)
 
-            # ✅ 只返回统计信息，不返回实际数据
-            # 这样主函数的 results 列表不会累积大量数据
             return {
                 'date_str': date_str,
-                'year': year,
-                'month': month,
-                'paper_count': paper_count,
-                'row_count': row_count,
+                'paper_count': total_papers,
+                'row_count': total_rows,
                 'csv_file': csv_file,
+                'write_count': write_count,
                 'error': None
             }
         else:
-            # ❌ 无数据 - 不保存到进度文件，下次会重试
             print(f"  ⚠️  {date_str}: 无数据（API限制或真实无数据）", flush=True)
-
-            # 不更新进度文件，让这个日期下次重新获取
             return {
                 'date_str': date_str,
-                'year': year,
-                'month': month,
                 'paper_count': 0,
                 'row_count': 0,
                 'error': 'NO_DATA'
@@ -377,24 +436,94 @@ async def fetch_openalex_day(
 
 
 def get_all_dates_backward() -> List[str]:
-    """获取从START_DATE往前到END_YEAR的所有日期（倒序）"""
+    """获取从START_DATE往前到END_YEAR的所有日期（倒序），跳过每个月1号"""
     dates = []
     start_date_obj = datetime.strptime(START_DATE, '%Y%m%d')
     end_date_obj = datetime(END_YEAR, 12, 31)
 
     current = start_date_obj
     while current >= end_date_obj:
-        dates.append(current.strftime('%Y-%m-%d'))
+        # 跳过每个月的1号
+        if current.day != 1:
+            dates.append(current.strftime('%Y-%m-%d'))
         current -= timedelta(days=1)
 
     return dates
 
 
-def get_csv_filename(year: int, month: int) -> str:
-    """获取CSV文件名（按月份组织）"""
-    output_dir = '/home/apl064/apl/academic-scraper/output'
+def get_daily_csv_filename(date_str: str) -> str:
+    """
+    获取每日CSV文件名（按年月组织文件夹，按天命名文件）
+    新结构：output/openalex/2026/04/2026-04-10.csv
+    """
+    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+    year = date_obj.year
+    month = date_obj.month
+
+    # 创建年/月文件夹结构
+    output_dir = f'/home/apl064/apl/academic-scraper/output/openalex/{year}/{month:02d}'
     os.makedirs(output_dir, exist_ok=True)
-    return os.path.join(output_dir, f'{year}_{month:02d}_openalex_papers.csv')
+
+    # 返回日期文件路径
+    return os.path.join(output_dir, f'{date_str}.csv')
+
+
+async def check_api_quota():
+    """检查 API 配额状态"""
+    print("🔍 检查 API 配额状态...")
+    print(f"   使用 API Key: {OPENALEX_API_KEY[:8]}...")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{OPENALEX_API_BASE}/authors",
+                params={
+                    'per-page': 1,
+                    'api_key': OPENALEX_API_KEY
+                },
+                headers={
+                    'User-Agent': 'AcademicScraper/2.0-Fast',
+                    'Mailto': OPENALEX_EMAIL,
+                    'Accept': 'application/json'
+                }
+            )
+
+            if response.status_code == 429:
+                print("\n❌❌❌ API 配额已耗尽！❌❌❌")
+                print("=" * 60)
+                try:
+                    error_data = response.json()
+                    print(f"错误信息: {error_data.get('message', 'Rate limit exceeded')}")
+                    retry_after = error_data.get('retryAfter', 'N/A')
+                    print(f"配额重置时间: {retry_after} 秒后")
+                except:
+                    pass
+                print("\n💡 解决方案：")
+                print("   1. 等待配额重置")
+                print("   2. 检查 API Key 是否正确")
+                print("=" * 60)
+                return False
+
+            elif response.status_code == 200:
+                # 检查响应中的配额信息
+                try:
+                    meta = response.json().get('meta', {})
+                    count = meta.get('count', 0)
+                    print(f"✅ API 配额正常")
+                    print(f"   返回结果数: {count}\n")
+                except:
+                    print("✅ API 配额正常\n")
+                return True
+
+            else:
+                print(f"⚠️  API 返回异常状态码: {response.status_code}")
+                print("   尝试继续抓取...\n")
+                return True
+
+    except Exception as e:
+        print(f"⚠️  无法检查 API 配额: {e}")
+        print("   尝试继续抓取...\n")
+        return True
 
 
 async def main_async():
@@ -405,11 +534,21 @@ async def main_async():
     print()
 
     # 创建输出目录
-    os.makedirs('output', exist_ok=True)
+    os.makedirs('output/openalex', exist_ok=True)
 
     # 设置日志
     setup_logging()
     print("📝 日志已启用")
+
+    # 检查 API 配额
+    quota_ok = await check_api_quota()
+    if not quota_ok:
+        print("\n🛑 由于 API 配额耗尽，程序终止")
+        print("   💾 进度已保存，请稍后重试")
+        return
+
+    # 加载进度
+    progress = load_progress()
 
     # 加载进度
     progress = load_progress()
@@ -454,7 +593,7 @@ async def main_async():
         http2=True,
         headers={
             'User-Agent': 'AcademicScraper/2.0-Fast',
-            'Mailto': 'mailto@example.com',
+            'Mailto': OPENALEX_EMAIL,
             'Accept': 'application/json'
         }
     ) as client:
@@ -497,10 +636,6 @@ async def main_async():
                     print(f"🛑 API配额耗尽，程序停止")
                     print(f"💾 进度已保存到: {PROGRESS_FILE}")
                     print(f"{'='*60}\n")
-                    # 取消所有未完成的任务
-                    for task in tasks:
-                        if not task.done():
-                            task.cancel()
                     return  # 退出主函数
 
                 if result.get('error') and result.get('error') != 'NO_DATA':

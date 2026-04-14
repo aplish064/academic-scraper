@@ -83,11 +83,12 @@ def main():
     print("=" * 80)
     print()
 
-    # 获取所有CSV文件
+    # 获取所有CSV文件（递归查找）
     csv_files = []
-    for filename in sorted(os.listdir(OUTPUT_DIR)):
-        if filename.endswith('_openalex_papers.csv') and not filename.startswith('2026_3_'):
-            csv_files.append(os.path.join(OUTPUT_DIR, filename))
+    for root, dirs, files in os.walk(OUTPUT_DIR):
+        for filename in files:
+            if filename.endswith('.csv'):
+                csv_files.append(os.path.join(root, filename))
 
     if not csv_files:
         print("❌ 未找到CSV文件")
