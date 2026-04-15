@@ -24,13 +24,16 @@ from tqdm.asyncio import tqdm
 OPENALEX_API_BASE = "https://api.openalex.org"
 
 # API 配置
-OPENALEX_API_KEY = "zF5B0bERxfXCZsPF1P5TiY"  # 您的 API Key
-OPENALEX_EMAIL = "13360197039@163.com"  # 您的邮箱
+# OPENALEX_API_KEY = "Q5QcudPogcFTfvV7vFOH1r"  # 您的 API Key
+# OPENALEX_EMAIL = "1509901785@qq.com"  # 您的邮箱
 
-# CSV字段
+# CSV字段（包含机构和质量指标）
 CSV_FIELDS = [
     'author_id', 'author', 'uid', 'doi', 'title', 'rank', 'journal',
-    'citation_count', 'tag', 'state'
+    'citation_count', 'tag', 'state',
+    'institution_id', 'institution_name', 'institution_country', 'institution_type',
+    'raw_affiliation',
+    'fwci', 'citation_percentile', 'primary_topic', 'is_retracted'
 ]
 
 # 日志目录和文件
@@ -113,7 +116,7 @@ def log_completion(total_papers: int, total_rows: int, success_count: int, skip_
 
 
 def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
-    """解析 OpenAlex 作品数据"""
+    """解析 OpenAlex 作品数据（包含论文发表时的机构信息和质量指标）"""
     # 基本信息
     paper_id = work.get('id', '')
     title = work.get('title', '')
@@ -124,7 +127,7 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
     if doi is None:
         doi = ''
 
-    # 作者信息
+    # 作者信息（包含机构信息）
     authors = []
     authorships = work.get('authorships', [])
 
@@ -137,11 +140,38 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
             if author_id and '/A' in author_id:
                 author_id = author_id.split('/A')[-1]
 
+            # 提取机构信息（论文发表时的机构）
+            institutions = auth.get('institutions', [])
+            institution_info = {
+                'id': '',
+                'name': '',
+                'country': '',
+                'type': '',
+                'raw': ''
+            }
+
+            # 获取原始归属字符串（论文元数据中的自由文本）
+            raw_affiliations = auth.get('raw_affiliation_strings', [])
+            if raw_affiliations:
+                # 使用第一个原始归属字符串
+                institution_info['raw'] = raw_affiliations[0]
+
+            # 如果有已解析的机构，使用第一个机构
+            if institutions:
+                first_inst = institutions[0]
+                inst_id = first_inst.get('id', '')
+                if inst_id and '/I' in inst_id:
+                    institution_info['id'] = inst_id.split('/I')[-1]
+                institution_info['name'] = first_inst.get('display_name', '')
+                institution_info['country'] = first_inst.get('country_code', '')
+                institution_info['type'] = first_inst.get('type', '')
+
             authors.append({
                 'id': author_id,  # OpenAlex Author ID
                 'name': author_info['display_name'],
                 'orcid': author_info.get('orcid', ''),
-                'rank': idx + 1
+                'rank': idx + 1,
+                'institution': institution_info  # 添加机构信息
             })
 
     # 期刊/会议信息
@@ -156,6 +186,21 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
     concepts = work.get('concepts', [])
     categories = [c.get('display_name', '') for c in concepts[:3] if c.get('display_name')]
 
+    # ✅ 新增：质量指标
+    # 领域加权影响因子
+    fwci = work.get('fwci', 0)
+
+    # 引用百分位
+    citation_percentile_obj = work.get('cited_by_percentile_year', {})
+    citation_percentile = citation_percentile_obj.get('min', 0) if citation_percentile_obj else 0
+
+    # 主要研究主题
+    primary_topic_obj = work.get('primary_topic', {})
+    primary_topic = primary_topic_obj.get('display_name', '') if primary_topic_obj else ''
+
+    # 是否撤稿
+    is_retracted = work.get('is_retracted', False)
+
     return {
         'uid': paper_id,
         'doi': doi,
@@ -163,7 +208,12 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
         'authors': authors,
         'journal': journal,
         'citation_count': citation_count,
-        'categories': categories
+        'categories': categories,
+        # 新增质量指标
+        'fwci': fwci,
+        'citation_percentile': citation_percentile,
+        'primary_topic': primary_topic,
+        'is_retracted': is_retracted
     }
 
 
@@ -237,7 +287,7 @@ async def fetch_openalex_day(
                     'filter': f'from_publication_date:{date_str},to_publication_date:{date_str},type:article',
                     'per-page': per_page,
                     'cursor': cursor,
-                    'api_key': OPENALEX_API_KEY
+                    # 'api_key': OPENALEX_API_KEY
                 }
 
                 response = await client.get(
@@ -290,7 +340,16 @@ async def fetch_openalex_day(
                                 'journal': paper['journal'],
                                 'citation_count': paper['citation_count'],
                                 'tag': tag,
-                                'state': ''
+                                'state': '',
+                                'institution_id': author_info.get('institution', {}).get('id', ''),
+                                'institution_name': author_info.get('institution', {}).get('name', ''),
+                                'institution_country': author_info.get('institution', {}).get('country', ''),
+                                'institution_type': author_info.get('institution', {}).get('type', ''),
+                                'raw_affiliation': author_info.get('institution', {}).get('raw', ''),
+                                'fwci': paper.get('fwci', 0),
+                                'citation_percentile': paper.get('citation_percentile', 0),
+                                'primary_topic': paper.get('primary_topic', ''),
+                                'is_retracted': paper.get('is_retracted', False)
                             })
 
                     # 写入CSV
@@ -471,7 +530,7 @@ def get_daily_csv_filename(date_str: str) -> str:
 async def check_api_quota():
     """检查 API 配额状态"""
     print("🔍 检查 API 配额状态...")
-    print(f"   使用 API Key: {OPENALEX_API_KEY[:8]}...")
+    # print(f"   使用 API Key: {OPENALEX_API_KEY[:8]}...")
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -479,11 +538,11 @@ async def check_api_quota():
                 f"{OPENALEX_API_BASE}/authors",
                 params={
                     'per-page': 1,
-                    'api_key': OPENALEX_API_KEY
+                    # 'api_key': OPENALEX_API_KEY
                 },
                 headers={
                     'User-Agent': 'AcademicScraper/2.0-Fast',
-                    'Mailto': OPENALEX_EMAIL,
+                    # 'Mailto': OPENALEX_EMAIL,
                     'Accept': 'application/json'
                 }
             )
@@ -593,7 +652,7 @@ async def main_async():
         http2=True,
         headers={
             'User-Agent': 'AcademicScraper/2.0-Fast',
-            'Mailto': OPENALEX_EMAIL,
+            # 'Mailto': OPENALEX_EMAIL,
             'Accept': 'application/json'
         }
     ) as client:
