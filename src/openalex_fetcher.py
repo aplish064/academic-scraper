@@ -24,8 +24,8 @@ from tqdm.asyncio import tqdm
 OPENALEX_API_BASE = "https://api.openalex.org"
 
 # API 配置
-# OPENALEX_API_KEY = "Q5QcudPogcFTfvV7vFOH1r"  # 您的 API Key
-# OPENALEX_EMAIL = "1509901785@qq.com"  # 您的邮箱
+OPENALEX_API_KEY = "toZBE5tNglH7oDydLefrKc"  # 您的 API Key
+OPENALEX_EMAIL = "29364625666@qq.com"  # 您的邮箱
 
 # CSV字段（包含机构和质量指标）
 CSV_FIELDS = [
@@ -287,7 +287,7 @@ async def fetch_openalex_day(
                     'filter': f'from_publication_date:{date_str},to_publication_date:{date_str},type:article',
                     'per-page': per_page,
                     'cursor': cursor,
-                    # 'api_key': OPENALEX_API_KEY
+                    'api_key': OPENALEX_API_KEY
                 }
 
                 response = await client.get(
@@ -538,11 +538,11 @@ async def check_api_quota():
                 f"{OPENALEX_API_BASE}/authors",
                 params={
                     'per-page': 1,
-                    # 'api_key': OPENALEX_API_KEY
+                    'api_key': OPENALEX_API_KEY
                 },
                 headers={
                     'User-Agent': 'AcademicScraper/2.0-Fast',
-                    # 'Mailto': OPENALEX_EMAIL,
+                    'Mailto': OPENALEX_EMAIL,
                     'Accept': 'application/json'
                 }
             )
@@ -652,7 +652,7 @@ async def main_async():
         http2=True,
         headers={
             'User-Agent': 'AcademicScraper/2.0-Fast',
-            # 'Mailto': OPENALEX_EMAIL,
+            'Mailto': OPENALEX_EMAIL,
             'Accept': 'application/json'
         }
     ) as client:
