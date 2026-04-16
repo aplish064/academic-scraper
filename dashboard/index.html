@@ -1,0 +1,1616 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>学术数据看板 | Academic Research Dashboard</title>
+    <!-- 使用本地字体，移除Google Fonts以提高加载速度 -->
+    <script src="chart.umd.js"></script>
+    <style>
+        :root {
+            --primary-blue: #1a3a52;
+            --secondary-blue: #2563eb;
+            --accent-blue: #3b82f6;
+            --light-blue: #60a5fa;
+            --pale-blue: #dbeafe;
+            --off-white: #f8fafc;
+            --white: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --border-color: #e2e8f0;
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+            --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.12);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, var(--off-white) 0%, var(--pale-blue) 100%);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        header {
+            margin-bottom: 3rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary-blue);
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            font-weight: 300;
+            letter-spacing: 0.02em;
+        }
+
+        .header-meta {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .meta-item {
+            text-align: center;
+        }
+
+        .meta-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        .meta-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--primary-blue);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--white);
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: var(--shadow-sm);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            animation: fadeInUp 0.6s ease-out backwards;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(180deg, var(--primary-blue) 0%, var(--accent-blue) 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .stat-card:hover::before {
+            opacity: 1;
+        }
+
+        .stat-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--pale-blue) 0%, var(--light-blue) 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .stat-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+            font-weight: 500;
+        }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--primary-blue);
+            line-height: 1;
+        }
+
+        /* Charts Grid */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .chart-card {
+            background: var(--white);
+            border-radius: 12px;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+            animation: fadeInUp 0.6s ease-out backwards;
+        }
+
+        .chart-card.large {
+            grid-column: span 2;
+        }
+
+        .chart-header {
+            padding: 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chart-title {
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--primary-blue);
+        }
+
+        .chart-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        .chart-body {
+            padding: 1.25rem;
+            height: 800px;  /* 增加高度以显示TOP50期刊 */
+            position: relative;
+        }
+
+        .chart-body.small {
+            height: 280px;
+        }
+
+        /* Animations */
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Loading */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.95);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+
+        .loading-text {
+            font-size: 1.1rem;
+            color: var(--primary-blue);
+            margin-bottom: 0.5rem;
+        }
+
+        .loading-subtext {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Filter Bar */
+        .filter-bar {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            padding: 1rem;
+            background: var(--white);
+            border-radius: 12px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .filter-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .filter-select {
+            padding: 0.5rem 2rem 0.5rem 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--white);
+            color: var(--text-primary);
+            font-size: 0.85rem;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 0.5rem center;
+        }
+
+        .filter-select:hover {
+            border-color: var(--light-blue);
+        }
+
+        /* Data Tables */
+        .data-table-container {
+            background: var(--white);
+            border-radius: 12px;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+            margin-bottom: 2rem;
+        }
+
+        .data-table-header {
+            padding: 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table-title {
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--primary-blue);
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .data-table th {
+            text-align: left;
+            padding: 0.75rem 1rem;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-secondary);
+            font-weight: 600;
+            border-bottom: 2px solid var(--border-color);
+            background: var(--off-white);
+        }
+
+        .data-table td {
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table tr:hover td {
+            background: var(--off-white);
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+            .chart-card.large {
+                grid-column: span 1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+            h1 {
+                font-size: 1.75rem;
+            }
+            .header-meta {
+                display: none;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 2rem 0;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border-color);
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">正在加载数据...</div>
+        <div class="loading-subtext" id="loadingSubtext">准备分析</div>
+    </div>
+
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="header-content">
+                <div>
+                    <h1>学术数据分析看板</h1>
+                    <p class="subtitle">Academic Research Analytics Dashboard</p>
+                </div>
+                <div class="header-meta">
+                    <div class="meta-item">
+                        <div class="meta-label">数据更新</div>
+                        <div class="meta-value" id="lastUpdate">--</div>
+                    </div>
+                    <div class="meta-item">
+                        <div class="meta-label">记录数</div>
+                        <div class="meta-value" id="totalRecords">--</div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+            <div class="filter-group">
+                <label class="filter-label">数据范围</label>
+                <select class="filter-select" id="dateRange">
+                    <option value="30">最近30天</option>
+                    <option value="90">最近90天</option>
+                    <option value="180">最近180天</option>
+                    <option value="365">最近1年</option>
+                    <option value="all">全部数据</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">引用阈值</label>
+                <select class="filter-select" id="citationThreshold">
+                    <option value="0">全部</option>
+                    <option value="10">≥10次</option>
+                    <option value="50">≥50次</option>
+                    <option value="100">≥100次</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <button onclick="refreshData()" style="padding: 0.5rem 1rem; background: var(--secondary-blue); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">刷新数据</button>
+            </div>
+        </div>
+
+        <!-- Statistics Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">📄</div>
+                <div class="stat-label">总论文数</div>
+                <div class="stat-value" id="totalPapers">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
+                <div class="stat-label">作者总数</div>
+                <div class="stat-value" id="totalAuthors">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📚</div>
+                <div class="stat-label">期刊数量</div>
+                <div class="stat-value" id="totalJournals">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🏛️</div>
+                <div class="stat-label">机构数量</div>
+                <div class="stat-value" id="totalInstitutions">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">🔥</div>
+                <div class="stat-label">高被引论文</div>
+                <div class="stat-value" id="highCitations">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon">📊</div>
+                <div class="stat-label">平均FWCI</div>
+                <div class="stat-value" id="avgFwci">0</div>
+            </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+            <!-- 论文数量趋势 - 折线图 -->
+            <div class="chart-card large">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">论文数量趋势</div>
+                        <div class="chart-subtitle">按日期统计的论文发表数量</div>
+                    </div>
+                </div>
+                <div class="chart-body">
+                    <canvas id="papersTrendChart"></canvas>
+                </div>
+            </div>
+
+
+            <!-- 期刊分布 TOP20 - 横向柱状图 -->
+            <div class="chart-card large">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">TOP 50 期刊分布</div>
+                        <div class="chart-subtitle">论文数量最多的期刊</div>
+                    </div>
+                </div>
+                <div class="chart-body">
+                    <canvas id="journalDistChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 国家/地区分布 - 地图数据 -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">TOP 15 国家/地区</div>
+                        <div class="chart-subtitle">按作者数量统计</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="countryDistChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 机构类型分布 - 环形图 -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">机构类型分布</div>
+                        <div class="chart-subtitle">教育、公司、其他等</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="instTypeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 引用分布 - 柱状图 -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">引用次数分布</div>
+                        <div class="chart-subtitle">论文引用数量区间分布</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="citationDistChart"></canvas>
+                </div>
+            </div>
+
+            <!-- FWCI分布 - 直方图 -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">FWCI 分布</div>
+                        <div class="chart-subtitle">领域权重影响因子分布</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="fwciDistChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 每日论文累计 - 面积图 -->
+        </div>
+
+        <!-- Top Papers Table -->
+        <div class="data-table-container">
+            <div class="data-table-header">
+                <div class="data-table-title">TOP 20 高被引论文</div>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>排名</th>
+                            <th>标题</th>
+                            <th>作者</th>
+                            <th>期刊</th>
+                            <th>引用数</th>
+                            <th>FWCI</th>
+                        </tr>
+                    </thead>
+                    <tbody id="topPapersTable">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <footer>
+            <p>© 2026 学术数据分析看板 | 数据来源: OpenAlex | 更新时间: <span id="footerTime"></span></p>
+        </footer>
+    </div>
+
+    <script>
+        // Global data
+        let allPapers = [];
+        let charts = {};
+
+        // Chart.js global config
+        Chart.defaults.font.family = "'IBM Plex Sans', sans-serif";
+        Chart.defaults.color = '#64748b';
+        Chart.defaults.borderColor = '#e2e8f0';
+
+        // Format number
+        function formatNumber(num) {
+            return new Intl.NumberFormat('zh-CN').format(num);
+        }
+
+        // Animate number
+        function animateNumber(element, target, duration = 2000) {
+            const start = 0;
+            const increment = target / (duration / 16);
+            let current = start;
+
+            const timer = setInterval(() => {
+                current += increment;
+                if (current >= target) {
+                    element.textContent = formatNumber(Math.round(target));
+                    clearInterval(timer);
+                } else {
+                    element.textContent = formatNumber(Math.round(current));
+                }
+            }, 16);
+        }
+
+        // Load all data
+        async function loadAllData() {
+            try {
+                updateLoading('正在从服务器获取聚合数据...');
+                const response = await fetch('/api/aggregated');
+                const data = await response.json();
+
+                if (data.success) {
+                    updateLoading('正在处理数据...');
+                    await processAggregatedData(data.data);
+                    hideLoading();
+                } else {
+                    throw new Error('获取数据失败');
+                }
+            } catch (error) {
+                console.error('Error loading data:', error);
+                updateLoading('数据加载失败，请刷新重试');
+            }
+        }
+
+        // Process aggregated data
+        async function processAggregatedData(data) {
+            // Update statistics from aggregated data
+            const stats = data.statistics;
+            animateNumber(document.getElementById('totalPapers'), stats.total_papers);
+            animateNumber(document.getElementById('totalAuthors'), stats.unique_authors);
+            animateNumber(document.getElementById('totalJournals'), stats.unique_journals);
+            animateNumber(document.getElementById('totalInstitutions'), stats.unique_institutions);
+            animateNumber(document.getElementById('highCitations'), stats.high_citations);
+            document.getElementById('avgFwci').textContent = stats.avg_fwci;
+
+            // Update timestamps
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent = now.toLocaleString('zh-CN');
+            document.getElementById('footerTime').textContent = now.toLocaleString('zh-CN');
+            document.getElementById('totalRecords').textContent = formatNumber(stats.total_papers);
+
+            // Create charts from aggregated data
+            await Promise.all([
+                createPapersTrendChartFromAggregated(data.papers_by_date),
+                createCitationDistChartFromAggregated(data.citations_distribution),
+                createJournalDistChartFromAggregated(data.top_journals),
+                createCountryDistChartFromAggregated(data.top_countries),
+                createInstTypeChartFromAggregated(data.institution_types),
+                createFwciDistChartFromAggregated(data.fwci_distribution),
+                updateTopPapersTableFromAggregated(data.top_papers)
+            ]);
+        }
+
+        // Update loading text
+        function updateLoading(text) {
+            document.getElementById('loadingSubtext').textContent = text;
+        }
+
+        // Hide loading overlay
+        function hideLoading() {
+            const overlay = document.getElementById('loadingOverlay');
+            overlay.style.transition = 'opacity 0.5s ease';
+            overlay.style.opacity = '0';
+            setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 500);
+        }
+
+        // Process and visualize data
+        async function processAndVisualize() {
+            updateLoading('正在分析数据...');
+
+            // Update statistics
+            updateStatistics();
+
+            // Update charts
+            await Promise.all([
+                createPapersTrendChart(),
+                createCitationDistChart(),
+                createJournalDistChart(),
+                createCountryDistChart(),
+                createInstTypeChart(),
+                createFwciDistChart()
+            ]);
+
+            // Update top papers table
+            updateTopPapersTable();
+
+            // Update timestamps
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent = now.toLocaleString('zh-CN');
+            document.getElementById('footerTime').textContent = now.toLocaleString('zh-CN');
+            document.getElementById('totalRecords').textContent = formatNumber(allPapers.length);
+        }
+
+        // Update statistics
+        function updateStatistics() {
+            const totalPapers = allPapers.length;
+            const uniqueAuthors = new Set(allPapers.map(p => p.author_id)).size;
+            const uniqueJournals = new Set(allPapers.map(p => p.journal)).size;
+            const uniqueInstitutions = new Set(
+                allPapers
+                    .filter(p => p.institution_name && p.institution_name !== 'nan')
+                    .map(p => p.institution_name)
+            ).size;
+            const highCitations = allPapers.filter(p => p.citation_count >= 50).length;
+
+            const fwcis = allPapers
+                .filter(p => p.fwci && p.fwci !== '' && p.fwci !== 'nan')
+                .map(p => parseFloat(p.fwci));
+            const avgFwci = fwcis.reduce((a, b) => a + b, 0) / fwcis.length || 0;
+
+            animateNumber(document.getElementById('totalPapers'), totalPapers);
+            animateNumber(document.getElementById('totalAuthors'), uniqueAuthors);
+            animateNumber(document.getElementById('totalJournals'), uniqueJournals);
+            animateNumber(document.getElementById('totalInstitutions'), uniqueInstitutions);
+            animateNumber(document.getElementById('highCitations'), highCitations);
+            document.getElementById('avgFwci').textContent = avgFwci.toFixed(2);
+        }
+
+        // Papers trend chart from aggregated data
+        function createPapersTrendChartFromAggregated(papersByDate) {
+            const sortedDates = Object.keys(papersByDate).sort();
+            const data = sortedDates.map(d => papersByDate[d]);
+
+            if (charts.papersTrend) charts.papersTrend.destroy();
+
+            const ctx = document.getElementById('papersTrendChart').getContext('2d');
+            charts.papersTrend = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedDates,
+                    datasets: [{
+                        label: '论文数量',
+                        data: data,
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 2,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true },
+                        x: {
+                            ticks: {
+                                display: false  // 隐藏横轴日期标签
+                            },
+                            grid: {
+                                display: false  // 隐藏横轴网格线
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Citation distribution from aggregated data
+        function createCitationDistChartFromAggregated(citationDist) {
+            const ranges = ['0', '1-10', '11-50', '51-100', '100+'];
+            const counts = ranges.map(r => citationDist[r] || 0);
+
+            if (charts.citationDist) charts.citationDist.destroy();
+
+            const ctx = document.getElementById('citationDistChart').getContext('2d');
+            charts.citationDist = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ranges,
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: [
+                            '#e2e8f0',
+                            '#93c5fd',
+                            '#60a5fa',
+                            '#3b82f6',
+                            '#2563eb'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // Author type from aggregated data
+        function createAuthorTypeChartFromAggregated(authorTypes) {
+            const labels = Object.keys(authorTypes);
+            const data = Object.values(authorTypes);
+
+            if (charts.authorType) charts.authorType.destroy();
+
+            const ctx = document.getElementById('authorTypeChart').getContext('2d');
+            charts.authorType = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: ['#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+
+        // Journal distribution from aggregated data
+        function createJournalDistChartFromAggregated(journals) {
+            // 按数量从大到小排序，取Top50
+            const sorted = Object.entries(journals)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 50);
+
+            if (charts.journalDist) charts.journalDist.destroy();
+
+            const ctx = document.getElementById('journalDistChart').getContext('2d');
+            charts.journalDist = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sorted.map(x => x[0]),
+                    datasets: [{
+                        label: '论文数量',
+                        data: sorted.map(x => x[1]),
+                        backgroundColor: '#2563eb'
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: {
+                        padding: {
+                            left: 50,  // 大幅增加左侧留白
+                            right: 10,
+                            top: 10,
+                            bottom: 10
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        title: {
+                            display: true,
+                            text: `TOP 50 期刊分布`,
+                            font: { size: 14 }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            ticks: {
+                                font: {
+                                    size: 10  // 稍微减小字体以容纳更多项
+                                },
+                                autoSkip: false,  // 不自动跳过标签
+                                maxRotation: 0,   // 不旋转标签
+                                // 限制期刊名称显示长度，太长的会截断
+                                callback: function(value, index, values) {
+                                    const label = this.getLabelForValue(value);
+                                    return label.length > 50 ? label.substring(0, 47) + '...' : label;
+                                }
+                            }
+                        },
+                        x: {
+                            // 压缩右侧条形图空间
+                            position: 'right',
+                            grid: {
+                                display: false  // 隐藏网格线以节省空间
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Country distribution from aggregated data
+        function createCountryDistChartFromAggregated(countries) {
+            // 按作者数量从大到小排序，取Top15
+            const sorted = Object.entries(countries)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 15);
+
+            if (charts.countryDist) charts.countryDist.destroy();
+
+            const ctx = document.getElementById('countryDistChart').getContext('2d');
+            charts.countryDist = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: sorted.map(x => x[0]),
+                    datasets: [{
+                        data: sorted.map(x => x[1]),
+                        backgroundColor: [
+                            '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd',
+                            '#dbeafe', '#1e40af', '#1d4ed8', '#1e3a8a',
+                            '#172554', '#0c4a6e', '#075985', '#0369a1',
+                            '#0ea5e9', '#0284c7', '#38bdf8'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        // Institution type from aggregated data
+        function createInstTypeChartFromAggregated(instTypes) {
+            const labels = Object.keys(instTypes);
+            const data = Object.values(instTypes);
+
+            if (charts.instType) charts.instType.destroy();
+
+            const ctx = document.getElementById('instTypeChart').getContext('2d');
+            charts.instType = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: ['#2563eb', '#60a5fa', '#93c5fd', '#dbeafe', '#e2e8f0']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+
+        // FWCI distribution from aggregated data
+        function createFwciDistChartFromAggregated(fwciDist) {
+            const bins = ['0-1', '1-2', '2-5', '5-10', '10-20', '20+'];
+            const counts = bins.map(b => fwciDist[b] || 0);
+
+            if (charts.fwciDist) charts.fwciDist.destroy();
+
+            const ctx = document.getElementById('fwciDistChart').getContext('2d');
+            charts.fwciDist = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: bins,
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: '#3b82f6'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // Update top papers table from aggregated data
+        function updateTopPapersTableFromAggregated(topPapers) {
+            // 按论文标题去重，保留第一作者
+            const seen = new Set();
+            const uniquePapers = topPapers.filter(paper => {
+                if (seen.has(paper.title)) {
+                    return false;
+                }
+                seen.add(paper.title);
+                return true;
+            });
+
+            const tbody = document.getElementById('topPapersTable');
+            tbody.innerHTML = uniquePapers.map((p, i) => `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td><a href="${p.doi}" target="_blank" style="color: #2563eb; text-decoration: none;">${p.title.substring(0, 80)}${p.title.length > 80 ? '...' : ''}</a></td>
+                    <td>${p.author}</td>
+                    <td>${p.journal.substring(0, 30)}${p.journal.length > 30 ? '...' : ''}</td>
+                    <td><strong>${p.citation_count}</strong></td>
+                    <td>${p.fwci || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Cumulative papers trend chart
+        function createCumulativeChartFromAggregated(papersByDate) {
+            const sortedDates = Object.keys(papersByDate).sort();
+            let cumulative = 0;
+            const cumulativeData = sortedDates.map(date => {
+                cumulative += papersByDate[date];
+                return cumulative;
+            });
+
+            if (charts.cumulative) charts.cumulative.destroy();
+
+            const ctx = document.getElementById('cumulativeChart').getContext('2d');
+            charts.cumulative = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedDates,
+                    datasets: [{
+                        label: '累计论文数量',
+                        data: cumulativeData,
+                        borderColor: '#059669',
+                        backgroundColor: 'rgba(5, 150, 105, 0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 2,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        // High citation trend chart - 模拟不同引用阈值的变化趋势
+        function createHighCitationTrendChartFromAggregated(citationDist) {
+            const ranges = ['0', '1-10', '11-50', '51-100', '100+'];
+            const counts = ranges.map(r => citationDist[r] || 0);
+
+            if (charts.highCitationTrend) charts.highCitationTrend.destroy();
+
+            const ctx = document.getElementById('highCitationTrendChart').getContext('2d');
+            charts.highCitationTrend = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ranges.map(r => r === '0' ? '0次引用' : r === '100+' ? '100+次引用' : `${r}次引用`),
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: [
+                            'rgba(107, 114, 128, 0.7)',
+                            'rgba(59, 130, 246, 0.7)',
+                            'rgba(16, 185, 129, 0.7)',
+                            'rgba(245, 158, 11, 0.7)',
+                            'rgba(239, 68, 68, 0.7)'
+                        ],
+                        borderColor: [
+                            'rgb(107, 114, 128)',
+                            'rgb(59, 130, 246)',
+                            'rgb(16, 185, 129)',
+                            'rgb(245, 158, 11)',
+                            'rgb(239, 68, 68)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        // Placeholder for cumulative chart
+        function createCumulativeChart() {
+            // Empty - will be implemented if needed
+            const ctx = document.getElementById('cumulativeChart').getContext('2d');
+            if (charts.cumulative) charts.cumulative.destroy();
+            charts.cumulative = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: []
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        title: {
+                            display: true,
+                            text: '功能开发中...'
+                        }
+                    }
+                }
+            });
+        }
+
+        // Placeholder for high citation trend
+        function createHighCitationTrendChart() {
+            // Empty - will be implemented if needed
+            const ctx = document.getElementById('highCitationTrendChart').getContext('2d');
+            if (charts.highCitationTrend) charts.highCitationTrend.destroy();
+            charts.highCitationTrend = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: []
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: '功能开发中...'
+                        }
+                    }
+                }
+            });
+        }
+
+        // Papers trend chart (Line)
+        function createPapersTrendChart() {
+            const papersByDate = {};
+            allPapers.forEach(p => {
+                const date = p.date || 'Unknown';
+                if (!papersByDate[date]) papersByDate[date] = 0;
+                papersByDate[date]++;
+            });
+
+            const sortedDates = Object.keys(papersByDate).sort().slice(-30);
+            const data = sortedDates.map(d => papersByDate[d]);
+
+            if (charts.papersTrend) charts.papersTrend.destroy();
+
+            const ctx = document.getElementById('papersTrendChart').getContext('2d');
+            charts.papersTrend = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedDates,
+                    datasets: [{
+                        label: '论文数量',
+                        data: data,
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 2,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true },
+                        x: {
+                            ticks: {
+                                display: false  // 隐藏横轴日期标签
+                            },
+                            grid: {
+                                display: false  // 隐藏横轴网格线
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Citation distribution chart (Bar)
+        function createCitationDistChart() {
+            const ranges = ['0', '1-10', '11-50', '51-100', '100+'];
+            const counts = [0, 0, 0, 0, 0];
+
+            allPapers.forEach(p => {
+                const c = p.citation_count;
+                if (c === 0) counts[0]++;
+                else if (c <= 10) counts[1]++;
+                else if (c <= 50) counts[2]++;
+                else if (c <= 100) counts[3]++;
+                else counts[4]++;
+            });
+
+            if (charts.citationDist) charts.citationDist.destroy();
+
+            const ctx = document.getElementById('citationDistChart').getContext('2d');
+            charts.citationDist = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ranges,
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: [
+                            '#e2e8f0',
+                            '#93c5fd',
+                            '#60a5fa',
+                            '#3b82f6',
+                            '#2563eb'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // Author type chart (Pie)
+        function createAuthorTypeChart() {
+            const types = {};
+            allPapers.forEach(p => {
+                const type = p.tag || '未知';
+                types[type] = (types[type] || 0) + 1;
+            });
+
+            if (charts.authorType) charts.authorType.destroy();
+
+            const ctx = document.getElementById('authorTypeChart').getContext('2d');
+            charts.authorType = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(types),
+                    datasets: [{
+                        data: Object.values(types),
+                        backgroundColor: ['#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+
+        // Journal distribution chart (Horizontal Bar)
+        function createJournalDistChart() {
+            const journals = {};
+            allPapers.forEach(p => {
+                const j = p.journal || 'Unknown';
+                journals[j] = (journals[j] || 0) + 1;
+            });
+
+            // 按数量从大到小排序，取Top50
+            const sorted = Object.entries(journals)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 50);
+
+            if (charts.journalDist) charts.journalDist.destroy();
+
+            const ctx = document.getElementById('journalDistChart').getContext('2d');
+            charts.journalDist = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: sorted.map(x => x[0]),
+                    datasets: [{
+                        label: '论文数量',
+                        data: sorted.map(x => x[1]),
+                        backgroundColor: '#2563eb'
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: {
+                        padding: {
+                            left: 50,  // 大幅增加左侧留白
+                            right: 10,
+                            top: 10,
+                            bottom: 10
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        title: {
+                            display: true,
+                            text: `TOP 50 期刊分布`,
+                            font: { size: 14 }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            ticks: {
+                                font: {
+                                    size: 10  // 稍微减小字体以容纳更多项
+                                },
+                                autoSkip: false,  // 不自动跳过标签
+                                maxRotation: 0,   // 不旋转标签
+                                // 限制期刊名称显示长度，太长的会截断
+                                callback: function(value, index, values) {
+                                    const label = this.getLabelForValue(value);
+                                    return label.length > 50 ? label.substring(0, 47) + '...' : label;
+                                }
+                            }
+                        },
+                        x: {
+                            // 压缩右侧条形图空间
+                            position: 'right',
+                            grid: {
+                                display: false  // 隐藏网格线以节省空间
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Country distribution chart (Doughnut)
+        function createCountryDistChart() {
+            // 按作者ID去重统计国家分布
+            const authorsByCountry = {};
+            allPapers.forEach(p => {
+                if (p.institution_country && p.institution_country !== 'nan' && p.author_id && p.author_id !== 'nan') {
+                    if (!authorsByCountry[p.institution_country]) {
+                        authorsByCountry[p.institution_country] = new Set();
+                    }
+                    authorsByCountry[p.institution_country].add(p.author_id);
+                }
+            });
+
+            // 转换为国家名称和作者数量
+            const countries = {};
+            Object.keys(authorsByCountry).forEach(country => {
+                countries[country] = authorsByCountry[country].size;
+            });
+
+            // 按作者数量从大到小排序，取Top15
+            const sorted = Object.entries(countries)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 15);
+
+            if (charts.countryDist) charts.countryDist.destroy();
+
+            const ctx = document.getElementById('countryDistChart').getContext('2d');
+            charts.countryDist = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: sorted.map(x => x[0]),
+                    datasets: [{
+                        data: sorted.map(x => x[1]),
+                        backgroundColor: [
+                            '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd',
+                            '#dbeafe', '#1e40af', '#1d4ed8', '#1e3a8a',
+                            '#172554', '#0c4a6e', '#075985', '#0369a1',
+                            '#0ea5e9', '#0284c7', '#38bdf8'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        // Institution type chart (Pie)
+        function createInstTypeChart() {
+            const types = {};
+            allPapers.forEach(p => {
+                if (p.institution_type && p.institution_type !== 'nan') {
+                    types[p.institution_type] = (types[p.institution_type] || 0) + 1;
+                }
+            });
+
+            if (charts.instType) charts.instType.destroy();
+
+            const ctx = document.getElementById('instTypeChart').getContext('2d');
+            charts.instType = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(types),
+                    datasets: [{
+                        data: Object.values(types),
+                        backgroundColor: ['#2563eb', '#60a5fa', '#93c5fd', '#dbeafe', '#e2e8f0']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+
+        // FWCI distribution chart (Histogram)
+        function createFwciDistChart() {
+            const fwcis = allPapers
+                .filter(p => p.fwci && p.fwci !== '' && p.fwci !== 'nan')
+                .map(p => parseFloat(p.fwci));
+
+            const bins = ['0-1', '1-2', '2-5', '5-10', '10-20', '20+'];
+            const counts = [0, 0, 0, 0, 0, 0];
+
+            fwcis.forEach(f => {
+                if (f < 1) counts[0]++;
+                else if (f < 2) counts[1]++;
+                else if (f < 5) counts[2]++;
+                else if (f < 10) counts[3]++;
+                else if (f < 20) counts[4]++;
+                else counts[5]++;
+            });
+
+            if (charts.fwciDist) charts.fwciDist.destroy();
+
+            const ctx = document.getElementById('fwciDistChart').getContext('2d');
+            charts.fwciDist = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: bins,
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: '#3b82f6'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // Cumulative papers chart (Area)
+        function createCumulativeChart() {
+            const papersByDate = {};
+            allPapers.forEach(p => {
+                const date = p.date || 'Unknown';
+                if (!papersByDate[date]) papersByDate[date] = 0;
+                papersByDate[date]++;
+            });
+
+            const sortedDates = Object.keys(papersByDate).sort();
+            let cumulative = 0;
+            const data = sortedDates.map(d => {
+                cumulative += papersByDate[d];
+                return cumulative;
+            });
+
+            if (charts.cumulative) charts.cumulative.destroy();
+
+            const ctx = document.getElementById('cumulativeChart').getContext('2d');
+            charts.cumulative = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedDates,
+                    datasets: [{
+                        label: '累计论文数',
+                        data: data,
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.3)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // High citation trend chart (Multi-line)
+        function createHighCitationTrendChart() {
+            const papersByDate = {};
+            const highCitationByDate = {};
+
+            allPapers.forEach(p => {
+                const date = p.date || 'Unknown';
+                if (!papersByDate[date]) {
+                    papersByDate[date] = 0;
+                    highCitationByDate[date] = { '10+': 0, '50+': 0, '100+': 0 };
+                }
+                papersByDate[date]++;
+                if (p.citation_count >= 10) highCitationByDate[date]['10+']++;
+                if (p.citation_count >= 50) highCitationByDate[date]['50+']++;
+                if (p.citation_count >= 100) highCitationByDate[date]['100+']++;
+            });
+
+            const sortedDates = Object.keys(papersByDate).sort().slice(-30);
+
+            if (charts.highCitationTrend) charts.highCitationTrend.destroy();
+
+            const ctx = document.getElementById('highCitationTrendChart').getContext('2d');
+            charts.highCitationTrend = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedDates,
+                    datasets: [
+                        {
+                            label: '≥10次引用',
+                            data: sortedDates.map(d => highCitationByDate[d]['10+']),
+                            borderColor: '#93c5fd',
+                            backgroundColor: 'transparent',
+                            tension: 0.4
+                        },
+                        {
+                            label: '≥50次引用',
+                            data: sortedDates.map(d => highCitationByDate[d]['50+']),
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'transparent',
+                            tension: 0.4
+                        },
+                        {
+                            label: '≥100次引用',
+                            data: sortedDates.map(d => highCitationByDate[d]['100+']),
+                            borderColor: '#2563eb',
+                            backgroundColor: 'transparent',
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        // Update top papers table
+        function updateTopPapersTable() {
+            const topPapers = [...allPapers]
+                .sort((a, b) => b.citation_count - a.citation_count)
+                .slice(0, 20);
+
+            const tbody = document.getElementById('topPapersTable');
+            tbody.innerHTML = topPapers.map((p, i) => `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td><a href="${p.doi}" target="_blank" style="color: #2563eb; text-decoration: none;">${p.title.substring(0, 80)}${p.title.length > 80 ? '...' : ''}</a></td>
+                    <td>${p.author}</td>
+                    <td>${p.journal.substring(0, 30)}${p.journal.length > 30 ? '...' : ''}</td>
+                    <td><strong>${p.citation_count}</strong></td>
+                    <td>${p.fwci || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Refresh data
+        function refreshData() {
+            showLoading();
+            loadAllData();
+        }
+
+        function showLoading() {
+            const overlay = document.getElementById('loadingOverlay');
+            overlay.style.display = 'flex';
+            overlay.style.opacity = '1';
+        }
+
+        // Initialize
+        window.addEventListener('DOMContentLoaded', () => {
+            loadAllData();
+        });
+    </script>
+</body>
+</html>
