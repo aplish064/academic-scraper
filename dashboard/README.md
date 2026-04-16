@@ -1,136 +1,360 @@
 # 学术数据看板
 
-一个简洁、现代的学术论文数据可视化看板，采用蓝白配色方案。
+一个高性能的学术论文数据可视化看板，基于ClickHouse数据库。
+
+## 📋 目录
+
+- [功能特点](#功能特点)
+- [技术栈](#技术栈)
+- [快速开始](#快速开始)
+- [ClickHouse安装](#clickhouse安装)
+- [数据导入](#数据导入)
+- [配置说明](#配置说明)
+- [API接口](#api接口)
+- [文件结构](#文件结构)
+- [故障排除](#故障排除)
 
 ## 功能特点
 
 - **📊 实时统计**: 论文总数、作者数、期刊数、高被引论文等
 - **📈 趋势图表**: 按日期展示论文发布趋势
 - **🔥 高被引论文**: 展示引用量最高的论文
-- **📋 论文列表**: 可筛选的最新论文表格
 - **🔍 多维度筛选**: 按时间、作者类型、引用数筛选
-- **💾 数据导出**: 支持导出筛选后的数据为CSV
+- **⚡ 高性能查询**: 基于ClickHouse的毫秒级响应
+- **📈 大数据支持**: 支持千万级数据查询
 
-## 设计特色
+## 技术栈
 
-- **简洁蓝白风格**: 清新专业的学术风格
-- **优雅的字体组合**: Playfair Display + IBM Plex Sans + JetBrains Mono
-- **流畅的动画**: 数字计数动画、卡片悬浮效果
-- **响应式设计**: 支持桌面和移动设备
-- **高性能**: 数据缓存机制，快速加载
+- **前端**: HTML5 + CSS3 + Vanilla JavaScript
+- **后端**: Flask + ClickHouse
+- **数据库**: ClickHouse (列式存储，高性能分析)
+- **样式**: 自定义CSS（无框架依赖）
 
 ## 快速开始
 
-### 方法1: 使用启动脚本（推荐）
+### 1. 安装依赖
 
 ```bash
-cd /home/apl064/apl/academic-scraper/dashboard
+pip install -r requirements.txt
+```
+
+### 2. 启动服务
+
+```bash
 ./start.sh
 ```
 
-### 方法2: 手动启动
-
-```bash
-# 1. 安装依赖
-pip3 install -r requirements.txt
-
-# 2. 启动服务
-python3 api_server.py
-```
-
-### 访问看板
-
-服务启动后，在浏览器中访问：
+### 3. 访问看板
 
 ```
 http://localhost:5000
 ```
 
-## API接口
+## ClickHouse安装
 
-后端提供以下API接口：
+### Ubuntu/Debian系统
+
+```bash
+# 添加ClickHouse仓库
+echo "deb https://packages.clickhouse.com/deb stable main" | sudo tee \
+    /etc/apt/sources.list.d/clickhouse.list
+
+# 安装ClickHouse
+sudo apt update
+sudo apt install -y clickhouse-server clickhouse-client
+
+# 启动服务
+sudo systemctl start clickhouse-server
+sudo systemctl enable clickhouse-server
+
+# 验证安装
+clickhouse-client --query "SELECT 1"
+```
+
+### 配置远程访问
+
+```bash
+# 编辑配置文件
+sudo nano /etc/clickhouse-server/config.xml
+
+# 找到并修改这行
+<listen_host>::</listen_host>
+
+# 重启服务
+sudo systemctl restart clickhouse-server
+
+# 开放防火墙端口
+sudo ufw allow 8123/tcp
+sudo ufw allow 9000/tcp
+```
+
+### 其他系统
+
+**CentOS/RHEL:**
+```bash
+sudo yum install -y clickhouse-server clickhouse-client
+```
+
+**Docker:**
+```bash
+docker run -d --name clickhouse \
+  -p 8123:8123 -p 9000:9000 \
+  clickhouse/clickhouse-server:24.3
+```
+
+## 数据导入
+
+### 1. 测试ClickHouse连接
+
+```bash
+python3 ../temp/test_clickhouse.py
+```
+
+### 2. 导入CSV数据
+
+```bash
+# 测试导入（前5个文件）
+python3 ../temp/clickhouse_import.py 5
+
+# 导入所有数据
+python3 ../temp/clickhouse_import.py
+```
+
+### 3. 验证导入结果
+
+```bash
+# 查看数据记录数
+clickhouse-client --query "SELECT count() FROM academic_db.papers"
+
+# 查看样本数据
+clickhouse-client --query "SELECT * FROM academic_db.papers LIMIT 5"
+```
+
+## 配置说明
+
+编辑 `config.py` 修改配置：
+
+```python
+# ClickHouse配置
+CLICKHOUSE_CONFIG = {
+    'host': 'localhost',        # ClickHouse主机
+    'port': 8123,               # HTTP端口
+    'database': 'academic_db',  # 数据库名
+    'username': 'default',      # 用户名
+    'password': '',             # 密码
+    'table': 'papers'           # 表名
+}
+
+# Flask服务配置
+FLASK_CONFIG = {
+    'host': '0.0.0.0',  # 监听地址
+    'port': 5000,       # 端口
+    'debug': False      # 调试模式
+}
+```
+
+### 环境变量配置
+
+也可以通过环境变量配置：
+
+```bash
+export CLICKHOUSE_HOST=localhost
+export CLICKHOUSE_PORT=8123
+export CLICKHOUSE_DATABASE=academic_db
+export CLICKHOUSE_USER=default
+export CLICKHOUSE_PASSWORD=
+export CLICKHOUSE_TABLE=papers
+```
+
+## API接口
 
 | 接口 | 说明 |
 |------|------|
 | `GET /` | 主页 |
-| `GET /api/papers` | 获取论文列表（支持分页） |
-| `GET /api/statistics` | 获取统计信息 |
-| `GET /api/top-papers` | 获取高被引论文 |
-| `GET /api/papers/by-date` | 按日期统计论文数 |
+| `GET /api/aggregated` | 获取聚合数据 |
+| `GET /api/health` | 健康检查 |
+| `GET /api/refresh` | 刷新缓存 |
 
-### 分页参数
+### 数据结构
+
+`/api/aggregated` 返回的数据结构：
+
+```json
+{
+  "papers_by_date": {},
+  "citations_distribution": {},
+  "author_types": {},
+  "top_journals": {},
+  "top_countries": {},
+  "institution_types": {},
+  "fwci_distribution": {},
+  "top_papers": [],
+  "statistics": {
+    "total_papers": 0,
+    "unique_authors": 0,
+    "unique_journals": 0,
+    "unique_institutions": 0,
+    "high_citations": 0,
+    "avg_fwci": 0
+  }
+}
+```
+
+## 文件结构
 
 ```
-GET /api/papers?page=1&per_page=100
+dashboard/
+├── api_server.py         # 主API服务
+├── config.py             # 配置文件
+├── index.html            # 前端页面
+├── chart.umd.js         # 图表库
+├── start.sh             # 启动脚本
+├── requirements.txt     # Python依赖
+└── README.md            # 本文档
 ```
 
-## 筛选功能
+### 文件说明
 
-看板支持以下筛选条件：
-
-- **时间范围**: 全部时间、最近7天、最近30天、最近90天
-- **作者类型**: 全部作者、第一作者、最后作者、其他作者
-- **最低引用**: 全部、≥10次、≥50次、≥100次
-
-## 数据来源
-
-数据来自 `/output/openalex/` 目录下的CSV文件，由 `openalex_fetcher.py` 生成。
-
-## 技术栈
-
-- **前端**: HTML5 + CSS3 + Vanilla JavaScript
-- **后端**: Flask + Pandas
-- **样式**: 自定义CSS（无框架依赖）
-- **字体**: Google Fonts（Playfair Display、IBM Plex Sans、JetBrains Mono）
-
-## 性能优化
-
-- **数据缓存**: 5分钟缓存机制，减少重复加载
-- **分页加载**: 支持大规模数据的分页查询
-- **懒加载**: 按需加载数据
-
-## 自定义配置
-
-可以在 `api_server.py` 中修改以下配置：
-
-```python
-# 缓存时长（秒）
-CACHE_DURATION = 300
-
-# 服务端口
-app.run(host='0.0.0.0', port=5000, debug=True)
-```
+- **api_server.py**: Flask API服务器，提供数据接口
+- **config.py**: 集中配置文件
+- **index.html**: 前端页面
+- **start.sh**: 一键启动脚本
+- **requirements.txt**: Python依赖列表
 
 ## 故障排除
 
-### 数据加载失败
+### ClickHouse连接失败
 
-确保CSV文件存在于正确路径：
+```bash
+# 检查ClickHouse服务
+sudo systemctl status clickhouse-server
+
+# 启动ClickHouse
+sudo systemctl start clickhouse-server
+
+# 测试连接
+curl http://localhost:8123/ping
+
+# 查看日志
+sudo tail -f /var/log/clickhouse-server/clickhouse-server.log
 ```
-/output/openalex/YYYY/MM/YYYY-MM-DD.csv
+
+### 数据未导入
+
+```bash
+# 测试数据库连接
+python3 ../temp/test_clickhouse.py
+
+# 查看数据记录
+clickhouse-client --query "SELECT count() FROM academic_db.papers"
+
+# 检查表是否存在
+clickhouse-client --query "SHOW TABLES FROM academic_db"
 ```
 
 ### 端口冲突
 
-如果5000端口被占用，可以修改端口：
+修改 `config.py` 中的端口配置：
 ```python
-app.run(host='0.0.0.0', port=8000, debug=True)
+FLASK_CONFIG = {
+    'port': 8000  # 改为其他端口
+}
 ```
 
 ### 依赖安装失败
 
-确保使用Python 3.8+：
+使用清华源：
 ```bash
-python3 --version
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/
 ```
 
-## 未来改进
+### 内存不足
 
-- [ ] 添加更多图表类型（饼图、散点图等）
-- [ ] 支持更多筛选条件
-- [ ] 添加数据对比功能
-- [ ] 支持导出为PDF报告
-- [ ] 添加数据预警功能
+如果导入时出现内存不足：
+```bash
+# 分批导入，每次只处理指定数量的文件
+python3 ../temp/clickhouse_import.py 10
+```
+
+## 性能优势
+
+相比CSV版本：
+- **查询速度**: 从秒级提升到毫秒级
+- **数据规模**: 支持千万级数据
+- **并发性能**: 支持多用户同时查询
+- **内存占用**: 大幅降低内存使用
+- **实时查询**: 无需预聚合，支持任意查询
+
+## 维护管理
+
+### 后台运行
+
+```bash
+# 使用nohup后台运行
+nohup ./start.sh > server.log 2>&1 &
+
+# 查看日志
+tail -f server.log
+
+# 停止服务
+pkill -f api_server.py
+```
+
+### 系统服务
+
+创建systemd服务：
+```bash
+sudo nano /etc/systemd/system/academic-dashboard.service
+```
+
+内容：
+```ini
+[Unit]
+Description=Academic Dashboard Service
+After=network.target clickhouse.service
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/path/to/dashboard
+ExecStart=/usr/bin/python3 /path/to/dashboard/api_server.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动服务：
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable academic-dashboard
+sudo systemctl start academic-dashboard
+```
+
+## 数据更新
+
+### 增量导入
+
+直接运行导入脚本会自动追加新数据：
+```bash
+python3 ../temp/clickhouse_import.py
+```
+
+### 重新导入
+
+```bash
+# 清空数据
+clickhouse-client --query "TRUNCATE TABLE academic_db.papers"
+
+# 重新导入
+python3 ../temp/clickhouse_import.py
+```
+
+## 获取帮助
+
+- ClickHouse文档：https://clickhouse.com/docs
+- Python客户端：https://github.com/ClickHouse/clickhouse-connect
 
 ## 许可证
 
