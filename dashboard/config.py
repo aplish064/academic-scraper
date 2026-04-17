@@ -8,14 +8,22 @@ CLICKHOUSE_CONFIG = {
     'port': 8123,
     'database': 'academic_db',
     'username': 'default',
-    'password': '',
-    'table': 'papers'
+    'password': ''
 }
+
+# 数据表配置
+TABLES = {
+    'openalex': 'OpenAlex',       # OpenAlex数据表
+    'semantic': 'semantic'        # Semantic Scholar数据表
+}
+
+# 默认数据表
+DEFAULT_TABLE = 'openalex'
 
 # Flask服务配置
 FLASK_CONFIG = {
     'host': '0.0.0.0',
-    'port': 5000,
+    'port': 8080,
     'debug': False
 }
 

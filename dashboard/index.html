@@ -116,18 +116,6 @@
             animation: fadeInUp 0.6s ease-out backwards;
         }
 
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 4px;
-            height: 100%;
-            background: linear-gradient(180deg, var(--primary-blue) 0%, var(--accent-blue) 100%);
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-
         .stat-card:hover {
             transform: translateY(-4px);
             box-shadow: var(--shadow-lg);
@@ -137,25 +125,13 @@
             opacity: 1;
         }
 
-        .stat-icon {
-            width: 36px;
-            height: 36px;
-            background: linear-gradient(135deg, var(--pale-blue) 0%, var(--light-blue) 100%);
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 0.75rem;
-            font-size: 1.1rem;
-        }
-
         .stat-label {
-            font-size: 0.7rem;
+            font-size: 0.8rem;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--text-secondary);
-            margin-bottom: 0.25rem;
-            font-weight: 500;
+            letter-spacing: 0.05em;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
         }
 
         .stat-value {
@@ -183,7 +159,7 @@
         }
 
         .chart-card.large {
-            grid-column: span 2;
+            grid-column: 1 / -1;
         }
 
         .chart-header {
@@ -441,22 +417,11 @@
         <!-- Filter Bar -->
         <div class="filter-bar">
             <div class="filter-group">
-                <label class="filter-label">数据范围</label>
-                <select class="filter-select" id="dateRange">
-                    <option value="30">最近30天</option>
-                    <option value="90">最近90天</option>
-                    <option value="180">最近180天</option>
-                    <option value="365">最近1年</option>
+                <label class="filter-label">数据源</label>
+                <select class="filter-select" id="dataSource" onchange="changeDataSource()">
                     <option value="all">全部数据</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label class="filter-label">引用阈值</label>
-                <select class="filter-select" id="citationThreshold">
-                    <option value="0">全部</option>
-                    <option value="10">≥10次</option>
-                    <option value="50">≥50次</option>
-                    <option value="100">≥100次</option>
+                    <option value="openalex">OpenAlex</option>
+                    <option value="semantic">Semantic Scholar</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -467,32 +432,26 @@
         <!-- Statistics Grid -->
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-icon">📄</div>
                 <div class="stat-label">总论文数</div>
                 <div class="stat-value" id="totalPapers">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-icon">👥</div>
                 <div class="stat-label">作者总数</div>
                 <div class="stat-value" id="totalAuthors">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-icon">📚</div>
                 <div class="stat-label">期刊数量</div>
                 <div class="stat-value" id="totalJournals">0</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-icon">🏛️</div>
+            <div class="stat-card" id="institutionsCard" style="display: none;">
                 <div class="stat-label">机构数量</div>
                 <div class="stat-value" id="totalInstitutions">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-icon">🔥</div>
                 <div class="stat-label">高被引论文</div>
                 <div class="stat-value" id="highCitations">0</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-icon">📊</div>
+            <div class="stat-card" id="fwciCard" style="display: none;">
                 <div class="stat-label">平均FWCI</div>
                 <div class="stat-value" id="avgFwci">0</div>
             </div>
@@ -528,7 +487,7 @@
             </div>
 
             <!-- 国家/地区分布 - 地图数据 -->
-            <div class="chart-card">
+            <div class="chart-card" id="countryCard" style="display: none;">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">TOP 15 国家/地区</div>
@@ -541,7 +500,7 @@
             </div>
 
             <!-- 机构类型分布 - 环形图 -->
-            <div class="chart-card">
+            <div class="chart-card" id="instTypeCard" style="display: none;">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">机构类型分布</div>
@@ -567,7 +526,7 @@
             </div>
 
             <!-- FWCI分布 - 直方图 -->
-            <div class="chart-card">
+            <div class="chart-card" id="fwciDistCard" style="display: none;">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">FWCI 分布</div>
@@ -583,7 +542,7 @@
         </div>
 
         <!-- Top Papers Table -->
-        <div class="data-table-container">
+        <div class="data-table-container" style="display: none;">
             <div class="data-table-header">
                 <div class="data-table-title">TOP 20 高被引论文</div>
             </div>
@@ -596,7 +555,7 @@
                             <th>作者</th>
                             <th>期刊</th>
                             <th>引用数</th>
-                            <th>FWCI</th>
+                            <th id="fwciColumnHeader">FWCI</th>
                         </tr>
                     </thead>
                     <tbody id="topPapersTable">
@@ -614,6 +573,7 @@
         // Global data
         let allPapers = [];
         let charts = {};
+        let currentDataSource = 'all'; // 'all', 'openalex', 'semantic'
 
         // Chart.js global config
         Chart.defaults.font.family = "'IBM Plex Sans', sans-serif";
@@ -627,6 +587,12 @@
 
         // Animate number
         function animateNumber(element, target, duration = 2000) {
+            // 对于大数字（>100万）或非数字类型，直接显示结果避免性能问题
+            if (typeof target !== 'number' || target > 1000000) {
+                element.textContent = formatNumber(Math.round(target));
+                return;
+            }
+
             const start = 0;
             const increment = target / (duration / 16);
             let current = start;
@@ -642,16 +608,32 @@
             }, 16);
         }
 
+        // Change data source
+        function changeDataSource() {
+            const select = document.getElementById('dataSource');
+            currentDataSource = select.value;
+            refreshData();
+        }
+
         // Load all data
         async function loadAllData() {
             try {
                 updateLoading('正在从服务器获取聚合数据...');
-                const response = await fetch('/api/aggregated');
+
+                // 根据数据源构建URL
+                let url = '/api/aggregated';
+                if (currentDataSource !== 'all') {
+                    url += `?source=${currentDataSource}`;
+                } else {
+                    url += `?source=all`;
+                }
+
+                const response = await fetch(url);
                 const data = await response.json();
 
-                if (data.success) {
+                if (data.success || data.statistics) {
                     updateLoading('正在处理数据...');
-                    await processAggregatedData(data.data);
+                    await processAggregatedData(data);
                     hideLoading();
                 } else {
                     throw new Error('获取数据失败');
@@ -664,31 +646,95 @@
 
         // Process aggregated data
         async function processAggregatedData(data) {
-            // Update statistics from aggregated data
-            const stats = data.statistics;
-            animateNumber(document.getElementById('totalPapers'), stats.total_papers);
-            animateNumber(document.getElementById('totalAuthors'), stats.unique_authors);
-            animateNumber(document.getElementById('totalJournals'), stats.unique_journals);
-            animateNumber(document.getElementById('totalInstitutions'), stats.unique_institutions);
-            animateNumber(document.getElementById('highCitations'), stats.high_citations);
-            document.getElementById('avgFwci').textContent = stats.avg_fwci;
+            try {
+                console.log('开始处理聚合数据...', data.source);
+                // Update statistics from aggregated data
+                const stats = data.statistics;
+                console.log('统计数据:', stats);
+                animateNumber(document.getElementById('totalPapers'), stats.total_papers);
+                animateNumber(document.getElementById('totalAuthors'), stats.unique_authors);
+                animateNumber(document.getElementById('totalJournals'), stats.unique_journals);
+                console.log('基础统计更新完成');
 
-            // Update timestamps
-            const now = new Date();
-            document.getElementById('lastUpdate').textContent = now.toLocaleString('zh-CN');
-            document.getElementById('footerTime').textContent = now.toLocaleString('zh-CN');
-            document.getElementById('totalRecords').textContent = formatNumber(stats.total_papers);
+                // 根据数据源显示/隐藏统计卡片
+                const isInstitutionsAvailable = stats.unique_institutions > 0 && data.source === 'openalex';
+                const institutionsCard = document.getElementById('institutionsCard');
+                if (institutionsCard) {
+                    if (isInstitutionsAvailable) {
+                        institutionsCard.style.display = 'block';
+                        animateNumber(document.getElementById('totalInstitutions'), stats.unique_institutions);
+                    } else {
+                        institutionsCard.style.display = 'none';
+                    }
+                }
 
-            // Create charts from aggregated data
-            await Promise.all([
-                createPapersTrendChartFromAggregated(data.papers_by_date),
-                createCitationDistChartFromAggregated(data.citations_distribution),
-                createJournalDistChartFromAggregated(data.top_journals),
-                createCountryDistChartFromAggregated(data.top_countries),
-                createInstTypeChartFromAggregated(data.institution_types),
-                createFwciDistChartFromAggregated(data.fwci_distribution),
-                updateTopPapersTableFromAggregated(data.top_papers)
-            ]);
+                const isFwciAvailable = stats.avg_fwci > 0 && data.source === 'openalex';
+                const fwciCard = document.getElementById('fwciCard');
+                const fwciColumnHeader = document.getElementById('fwciColumnHeader');
+                if (fwciCard) {
+                    if (isFwciAvailable) {
+                        fwciCard.style.display = 'block';
+                        document.getElementById('avgFwci').textContent = stats.avg_fwci.toFixed(2);
+                        if (fwciColumnHeader) fwciColumnHeader.style.display = 'table-cell';
+                    } else {
+                        fwciCard.style.display = 'none';
+                        if (fwciColumnHeader) fwciColumnHeader.style.display = 'none';
+                    }
+                }
+
+                // 根据数据源显示/隐藏图表卡片
+                const countryCard = document.getElementById('countryCard');
+                const instTypeCard = document.getElementById('instTypeCard');
+                const fwciDistCard = document.getElementById('fwciDistCard');
+
+                // 只在OpenAlex数据源时显示这些图表，semantic和全部数据都隐藏
+                if (data.source === 'openalex') {
+                    if (countryCard) countryCard.style.display = 'block';
+                    if (instTypeCard) instTypeCard.style.display = 'block';
+                    if (fwciDistCard) fwciDistCard.style.display = 'block';
+                } else {
+                    // Semantic和全部数据源隐藏这些图表
+                    if (countryCard) countryCard.style.display = 'none';
+                    if (instTypeCard) instTypeCard.style.display = 'none';
+                    if (fwciDistCard) fwciDistCard.style.display = 'none';
+                }
+
+                animateNumber(document.getElementById('highCitations'), stats.high_citations);
+
+                // Update timestamps and data source info
+                const now = new Date();
+                const dataSourceText = data.source === 'openalex' ? 'OpenAlex' :
+                                     data.source === 'semantic' ? 'Semantic Scholar' : '全部数据';
+                document.getElementById('lastUpdate').textContent = `${dataSourceText} - ${now.toLocaleString('zh-CN')}`;
+                document.getElementById('footerTime').textContent = now.toLocaleString('zh-CN');
+                document.getElementById('totalRecords').textContent = formatNumber(stats.total_papers);
+
+                // 创建图表（根据数据源选择性创建）
+                const chartsToCreate = [
+                    createPapersTrendChartFromAggregated(data.papers_by_date),
+                    createCitationDistChartFromAggregated(data.citations_distribution),
+                    createJournalDistChartFromAggregated(data.top_journals)
+                ];
+
+                // 只为OpenAlex创建的图表（全部数据和semantic都不显示这些图表）
+                if (data.source === 'openalex') {
+                    if (Object.keys(data.top_countries).length > 0) {
+                        chartsToCreate.push(createCountryDistChartFromAggregated(data.top_countries));
+                    }
+                    if (Object.keys(data.institution_types).length > 0) {
+                        chartsToCreate.push(createInstTypeChartFromAggregated(data.institution_types));
+                    }
+                    if (Object.keys(data.fwci_distribution).length > 0) {
+                        chartsToCreate.push(createFwciDistChartFromAggregated(data.fwci_distribution));
+                    }
+                }
+
+                await Promise.all(chartsToCreate);
+                console.log('所有图表创建完成');
+            } catch (error) {
+                console.error('处理聚合数据时出错:', error);
+                throw error;
+            }
         }
 
         // Update loading text
@@ -713,15 +759,23 @@
             // Update statistics
             updateStatistics();
 
-            // Update charts
-            await Promise.all([
+            // Update charts based on data source
+            const chartsToCreate = [
                 createPapersTrendChart(),
                 createCitationDistChart(),
-                createJournalDistChart(),
-                createCountryDistChart(),
-                createInstTypeChart(),
-                createFwciDistChart()
-            ]);
+                createJournalDistChart()
+            ];
+
+            // Only create these charts for OpenAlex data source
+            if (currentDataSource === 'openalex') {
+                chartsToCreate.push(
+                    createCountryDistChart(),
+                    createInstTypeChart(),
+                    createFwciDistChart()
+                );
+            }
+
+            await Promise.all(chartsToCreate);
 
             // Update top papers table
             updateTopPapersTable();
@@ -1011,27 +1065,44 @@
 
         // Update top papers table from aggregated data
         function updateTopPapersTableFromAggregated(topPapers) {
-            // 按论文标题去重，保留第一作者
+            // 按DOI去重，如果没有DOI则按标题去重
             const seen = new Set();
             const uniquePapers = topPapers.filter(paper => {
-                if (seen.has(paper.title)) {
+                // 优先使用DOI作为唯一标识
+                const identifier = paper.doi && paper.doi !== '' ? paper.doi : paper.title;
+                if (seen.has(identifier)) {
                     return false;
                 }
-                seen.add(paper.title);
+                seen.add(identifier);
                 return true;
             });
 
             const tbody = document.getElementById('topPapersTable');
-            tbody.innerHTML = uniquePapers.map((p, i) => `
+            const isFwciAvailable = currentDataSource === 'openalex';
+
+            tbody.innerHTML = uniquePapers.map((p, i) => {
+                // 构建DOI链接
+                let titleHtml = '';
+                if (p.doi && p.doi !== '' && p.doi !== '无') {
+                    // 构建正确的DOI链接
+                    const doiUrl = p.doi.startsWith('http') ? p.doi : `https://doi.org/${p.doi}`;
+                    titleHtml = `<a href="${doiUrl}" target="_blank" style="color: #2563eb; text-decoration: none;">${p.title.substring(0, 80)}${p.title.length > 80 ? '...' : ''}</a>`;
+                } else {
+                    // 没有DOI，只显示标题
+                    titleHtml = `<span style="color: #1e293b;">${p.title.substring(0, 80)}${p.title.length > 80 ? '...' : ''}</span>`;
+                }
+
+                return `
                 <tr>
                     <td>${i + 1}</td>
-                    <td><a href="${p.doi}" target="_blank" style="color: #2563eb; text-decoration: none;">${p.title.substring(0, 80)}${p.title.length > 80 ? '...' : ''}</a></td>
+                    <td>${titleHtml}</td>
                     <td>${p.author}</td>
                     <td>${p.journal.substring(0, 30)}${p.journal.length > 30 ? '...' : ''}</td>
                     <td><strong>${p.citation_count}</strong></td>
-                    <td>${p.fwci || '-'}</td>
+                    ${isFwciAvailable ? `<td>${p.fwci > 0 ? p.fwci.toFixed(2) : '-'}</td>` : ''}
                 </tr>
-            `).join('');
+                `;
+            }).join('');
         }
 
         // Cumulative papers trend chart

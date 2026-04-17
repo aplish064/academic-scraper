@@ -21,15 +21,17 @@ CH_TABLE = 'papers'
 DATA_DIR = Path(__file__).parent.parent / 'output' / 'openalex'
 
 def create_connection():
-    """创建ClickHouse连接"""
+    """创建ClickHouse连接（先连接到default数据库）"""
     try:
+        # 先连接到default数据库
         client = clickhouse_connect.get_client(
             host=CH_HOST,
             port=CH_PORT,
             username=CH_USERNAME,
             password=CH_PASSWORD,
-            database=CH_DATABASE
+            database='default'  # 先连接到default
         )
+        print("✓ ClickHouse连接成功")
         return client
     except Exception as e:
         print(f"❌ 连接ClickHouse失败: {e}")
@@ -84,6 +86,15 @@ def create_table(client):
         count = result.result_rows[0][0]
         print(f"  当前记录数: {count:,}")
 
+        # 如果表有数据，询问是否继续
+        if count > 0:
+            print(f"\n⚠️  表中已有 {count:,} 条记录！")
+            print("继续导入会追加数据，不会删除现有记录。")
+            response = input("是否继续导入？(y/N): ")
+            if response.lower() != 'y':
+                print("❌ 导入已取消")
+                sys.exit(0)
+
     except Exception as e:
         print(f"❌ 创建表失败: {e}")
         sys.exit(1)
@@ -113,12 +124,31 @@ def import_csv_files(client, limit=None):
             # 显示进度
             print(f"\n[{idx}/{len(csv_files)}] 处理: {csv_file.name}")
 
-            # 读取CSV
+            # 读取CSV（使用多种方式尝试）
+            df = None
             try:
+                # 方法1：标准读取
                 df = pd.read_csv(csv_file, encoding='utf-8-sig', low_memory=False)
             except Exception as e:
-                print(f"  ⚠️  读取失败: {e}")
-                failed_files.append((csv_file.name, str(e)))
+                try:
+                    # 方法2：忽略错误行
+                    df = pd.read_csv(csv_file, encoding='utf-8-sig', low_memory=False,
+                                   on_bad_lines='skip', engine='python')
+                    print(f"  ⚠️  使用容错模式读取")
+                except Exception as e2:
+                    try:
+                        # 方法3：尝试不同编码
+                        df = pd.read_csv(csv_file, encoding='latin1', low_memory=False,
+                                       on_bad_lines='skip', engine='python')
+                        print(f"  ⚠️  使用备用编码读取")
+                    except Exception as e3:
+                        print(f"  ⚠️  读取失败: {e}")
+                        failed_files.append((csv_file.name, f"多重读取失败: {e}"))
+                        continue
+
+            if df is None or df.empty:
+                print(f"  ⚠️  空文件，跳过")
+                total_skipped += 1
                 continue
 
             if df.empty:
@@ -193,7 +223,7 @@ def import_csv_files(client, limit=None):
             # 批量插入
             if data_to_insert:
                 try:
-                    client.insert_df(CH_TABLE, pd.DataFrame(data_to_insert))
+                    client.insert_df(f'{CH_DATABASE}.{CH_TABLE}', pd.DataFrame(data_to_insert))
                     total_imported += len(data_to_insert)
                     print(f"  ✓ 成功导入 {len(data_to_insert)} 条记录")
                 except Exception as e:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-OpenAlex 论文自动获取工具 - 极速版（按天）
+OpenAlex 论文自动获取工具 - 极速版（ClickHouse存储）
 - 异步IO + HTTP/2
-- 按天获取，按月写入CSV
+- 按天获取，直接写入ClickHouse
 - 并发请求
 - 预计速度提升 20-50 倍
 """
@@ -10,11 +10,11 @@ OpenAlex 论文自动获取工具 - 极速版（按天）
 import asyncio
 import httpx
 import time
-import csv
 import sys
 import json
 import os
 import gc
+import clickhouse_connect
 from typing import List, Dict, Any
 from datetime import datetime, timedelta
 from tqdm.asyncio import tqdm
@@ -24,20 +24,19 @@ from tqdm.asyncio import tqdm
 OPENALEX_API_BASE = "https://api.openalex.org"
 
 # API 配置
-OPENALEX_API_KEY = "toZBE5tNglH7oDydLefrKc"  # 您的 API Key
-OPENALEX_EMAIL = "29364625666@qq.com"  # 您的邮箱
+OPENALEX_API_KEY = "L9vCNGOe2ILsen4OQP3aPg"  # 您的 API Key
+OPENALEX_EMAIL = "20228132063@m.scnu.edu.cn"  # 您的邮箱
 
-# CSV字段（包含机构和质量指标）
-CSV_FIELDS = [
-    'author_id', 'author', 'uid', 'doi', 'title', 'rank', 'journal',
-    'citation_count', 'tag', 'state',
-    'institution_id', 'institution_name', 'institution_country', 'institution_type',
-    'raw_affiliation',
-    'fwci', 'citation_percentile', 'primary_topic', 'is_retracted'
-]
+# ClickHouse 配置
+CH_HOST = 'localhost'
+CH_PORT = 8123
+CH_DATABASE = 'academic_db'
+CH_TABLE = 'OpenAlex'
+CH_USERNAME = 'default'
+CH_PASSWORD = ''
 
 # 日志目录和文件
-LOG_DIR = "/home/apl064/apl/academic-scraper/log"
+LOG_DIR = "/home/hkustgz/Us/academic-scraper/log"
 LOG_FILE = os.path.join(LOG_DIR, "openalex_fetch_fast.log")
 PROGRESS_FILE = os.path.join(LOG_DIR, "openalex_fetch_progress.json")
 
@@ -46,7 +45,7 @@ START_DATE = "20260410"  # 从这个日期开始往前获取
 END_YEAR = 2010          # 往前获取到这一年
 
 # 并发配置
-MAX_CONCURRENT_REQUESTS = 20  # 最大并发请求数（降低以减少内存占用）
+MAX_CONCURRENT_REQUESTS = 30  # 最大并发请求数（降低以减少内存占用）
 REQUEST_TIMEOUT = 60.0
 MAX_RETRIES = 3
 
@@ -89,10 +88,10 @@ def setup_logging():
         f.write(log_message)
 
 
-def log_fetch_result(date_str: str, paper_count: int, row_count: int, csv_file: str):
+def log_fetch_result(date_str: str, paper_count: int, row_count: int):
     """记录每次获取结果到日志"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    log_message = f"[{timestamp}] {date_str} | 论文: {paper_count} | 行: {row_count} | 文件: {csv_file}\n"
+    log_message = f"[{timestamp}] {date_str} | 论文: {paper_count} | 行: {row_count} | 已写入ClickHouse\n"
 
     with open(LOG_FILE, 'a', encoding='utf-8') as f:
         f.write(log_message)
@@ -113,6 +112,95 @@ def log_completion(total_papers: int, total_rows: int, success_count: int, skip_
 
     with open(LOG_FILE, 'a', encoding='utf-8') as f:
         f.write(log_message)
+
+
+def create_clickhouse_client():
+    """创建ClickHouse客户端"""
+    try:
+        client = clickhouse_connect.get_client(
+            host=CH_HOST,
+            port=CH_PORT,
+            username=CH_USERNAME,
+            password=CH_PASSWORD,
+            database=CH_DATABASE
+        )
+        print("✓ ClickHouse连接成功")
+        return client
+    except Exception as e:
+        print(f"❌ ClickHouse连接失败: {e}")
+        return None
+
+
+def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
+    """批量插入数据到ClickHouse"""
+    if not rows:
+        return True
+
+    try:
+        import pandas as pd
+
+        # 数据清洗和类型转换
+        cleaned_rows = []
+        for row in rows:
+            cleaned_row = {}
+            for key, value in row.items():
+                # 处理None值
+                if value is None:
+                    # 数值字段设为0，字符串字段设为空字符串
+                    if key in ['rank', 'citation_count', 'fwci', 'citation_percentile']:
+                        cleaned_row[key] = 0
+                    elif key == 'is_retracted':
+                        cleaned_row[key] = False
+                    else:
+                        cleaned_row[key] = ''
+                # 处理NaN值
+                elif isinstance(value, float) and pd.isna(value):
+                    if key in ['rank', 'citation_count', 'citation_percentile']:
+                        cleaned_row[key] = 0
+                    elif key == 'fwci':
+                        cleaned_row[key] = 0.0
+                    elif key == 'is_retracted':
+                        cleaned_row[key] = False
+                    else:
+                        cleaned_row[key] = ''
+                # 确保数值字段类型正确
+                elif key in ['rank', 'citation_count', 'citation_percentile']:
+                    try:
+                        cleaned_row[key] = int(value)
+                    except (ValueError, TypeError):
+                        cleaned_row[key] = 0
+                elif key == 'fwci':
+                    try:
+                        cleaned_row[key] = float(value)
+                    except (ValueError, TypeError):
+                        cleaned_row[key] = 0.0
+                elif key == 'is_retracted':
+                    cleaned_row[key] = bool(value)
+                # 确保字符串字段不为None
+                else:
+                    cleaned_row[key] = str(value) if value is not None else ''
+
+            cleaned_rows.append(cleaned_row)
+
+        # 使用清洗后的数据创建DataFrame
+        df = pd.DataFrame(cleaned_rows)
+
+        # 确保数值列的类型正确
+        df['rank'] = df['rank'].astype(int)
+        df['citation_count'] = df['citation_count'].astype(int)
+        df['fwci'] = df['fwci'].astype(float)
+        df['citation_percentile'] = df['citation_percentile'].astype(int)
+        df['is_retracted'] = df['is_retracted'].astype(bool)
+
+        client.insert_df(f'{CH_DATABASE}.{CH_TABLE}', df)
+        return True
+
+    except Exception as e:
+        print(f"❌ 插入ClickHouse失败: {e}")
+        # 打印第一条数据用于调试
+        if rows:
+            print(f"   示例数据: {rows[0]}")
+        return False
 
 
 def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
@@ -177,18 +265,22 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
     # 期刊/会议信息
     primary_location = work.get('primary_location') or {}
     source = primary_location.get('source') or {}
-    journal = source.get('display_name', 'unknown')
+    journal = source.get('display_name', 'unknown') or 'unknown'
 
     # 被引次数
-    citation_count = work.get('cited_by_count', 0)
+    citation_count = work.get('cited_by_count', 0) or 0
 
     # 概念/分类
     concepts = work.get('concepts', [])
     categories = [c.get('display_name', '') for c in concepts[:3] if c.get('display_name')]
 
+    # ✅ 新增：论文发表日期
+    # OpenAlex API 提供了完整的发表日期
+    publication_date = work.get('publication_date', '') or ''
+
     # ✅ 新增：质量指标
     # 领域加权影响因子
-    fwci = work.get('fwci', 0)
+    fwci = work.get('fwci', 0) or 0
 
     # 引用百分位
     citation_percentile_obj = work.get('cited_by_percentile_year', {})
@@ -199,42 +291,28 @@ def parse_openalex_work(work: Dict[str, Any]) -> Dict[str, Any]:
     primary_topic = primary_topic_obj.get('display_name', '') if primary_topic_obj else ''
 
     # 是否撤稿
-    is_retracted = work.get('is_retracted', False)
+    is_retracted = work.get('is_retracted', False) or False
 
     return {
-        'uid': paper_id,
-        'doi': doi,
-        'title': title,
+        'uid': str(paper_id) if paper_id else '',
+        'doi': str(doi) if doi else '',
+        'title': str(title) if title else '',
         'authors': authors,
-        'journal': journal,
-        'citation_count': citation_count,
+        'journal': str(journal),
+        'citation_count': int(citation_count) if citation_count else 0,
         'categories': categories,
+        'publication_date': str(publication_date),  # 新增：论文发表日期
         # 新增质量指标
-        'fwci': fwci,
-        'citation_percentile': citation_percentile,
-        'primary_topic': primary_topic,
-        'is_retracted': is_retracted
+        'fwci': float(fwci) if fwci else 0.0,
+        'citation_percentile': int(citation_percentile) if citation_percentile else 0,
+        'primary_topic': str(primary_topic) if primary_topic else '',
+        'is_retracted': bool(is_retracted)
     }
 
 
-def append_rows_to_csv(rows: List[Dict[str, Any]], filepath: str):
-    """
-    追加行数据到CSV文件
-    每天一个文件，无需考虑并发冲突（不同天写不同文件）
-    """
-    file_exists = os.path.exists(filepath)
-
-    with open(filepath, 'a', newline='', encoding='utf-8-sig') as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, quoting=csv.QUOTE_ALL)
-        if not file_exists:
-            writer.writeheader()
-
-        # 一次性写入所有行
-        writer.writerows(rows)
-
-
 async def fetch_openalex_day(
-    client: httpx.AsyncClient,
+    http_client: httpx.AsyncClient,
+    ch_client,
     date_str: str,
     semaphore: asyncio.Semaphore,
     day_pbar: tqdm,
@@ -243,15 +321,15 @@ async def fetch_openalex_day(
     progress_lock: asyncio.Lock
 ) -> Dict[str, Any]:
     """
-    异步获取指定日期的所有论文（优化版：分批写入，及时释放内存）
+    异步获取指定日期的所有论文（优化版：分批写入ClickHouse，及时释放内存）
 
     优化策略：
-    1. 每累积 20,000 条论文记录就写入并清空
-    2. 每天写入独立文件，避免锁竞争
-    3. 文件组织：output/openalex/YYYY_MM/YYYY-MM-DD.csv
+    1. 每累积 20,000 条论文记录就写入ClickHouse并清空
+    2. 使用ClickHouse批量插入，高性能存储
 
     Args:
-        client: httpx 异步客户端
+        http_client: httpx 异步客户端
+        ch_client: ClickHouse客户端
         date_str: 日期字符串 (YYYY-MM-DD)
         semaphore: 信号量（控制并发）
         day_pbar: 天数进度条
@@ -271,7 +349,6 @@ async def fetch_openalex_day(
         retry_count = 0
 
         date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-        csv_file = get_daily_csv_filename(date_str)  # 获取每日CSV文件路径
 
         # 统计信息
         total_papers = 0
@@ -290,7 +367,7 @@ async def fetch_openalex_day(
                     'api_key': OPENALEX_API_KEY
                 }
 
-                response = await client.get(
+                response = await http_client.get(
                     f"{OPENALEX_API_BASE}/works",
                     params=params,
                     timeout=REQUEST_TIMEOUT
@@ -311,7 +388,7 @@ async def fetch_openalex_day(
                 # 更新论文进度条
                 paper_pbar.update(len(results))
 
-                # ✅ 关键优化：每累积 20,000 条就写入并清空
+                # ✅ 关键优化：每累积 20,000 条就写入ClickHouse并清空
                 if len(all_papers) >= BATCH_WRITE_THRESHOLD:
                     # 展开为作者行
                     rows = []
@@ -320,9 +397,9 @@ async def fetch_openalex_day(
                         total_authors = len(authors)
 
                         for author_info in authors:
-                            author_id = author_info.get('id', '')
-                            author_name = author_info['name']
-                            rank = author_info['rank']
+                            author_id = author_info.get('id', '') or ''
+                            author_name = author_info.get('name', '') or ''
+                            rank = author_info.get('rank', 1) or 1
 
                             tag = '其他'
                             if rank == 1:
@@ -330,30 +407,34 @@ async def fetch_openalex_day(
                             elif rank == total_authors:
                                 tag = '最后作者'
 
+                            # 获取机构信息
+                            institution = author_info.get('institution', {}) or {}
+
                             rows.append({
-                                'author_id': author_id,
-                                'author': author_name,
-                                'uid': paper['uid'],
-                                'doi': paper['doi'],
-                                'title': paper['title'],
-                                'rank': rank,
-                                'journal': paper['journal'],
-                                'citation_count': paper['citation_count'],
-                                'tag': tag,
+                                'author_id': str(author_id) if author_id else '',
+                                'author': str(author_name) if author_name else '',
+                                'uid': str(paper.get('uid', '') or ''),
+                                'doi': str(paper.get('doi', '') or ''),
+                                'title': str(paper.get('title', '') or ''),
+                                'rank': int(rank) if rank else 1,
+                                'journal': str(paper.get('journal', '') or ''),
+                                'publication_date': str(paper.get('publication_date', '') or ''),
+                                'citation_count': int(paper.get('citation_count', 0) or 0),
+                                'tag': str(tag),
                                 'state': '',
-                                'institution_id': author_info.get('institution', {}).get('id', ''),
-                                'institution_name': author_info.get('institution', {}).get('name', ''),
-                                'institution_country': author_info.get('institution', {}).get('country', ''),
-                                'institution_type': author_info.get('institution', {}).get('type', ''),
-                                'raw_affiliation': author_info.get('institution', {}).get('raw', ''),
-                                'fwci': paper.get('fwci', 0),
-                                'citation_percentile': paper.get('citation_percentile', 0),
-                                'primary_topic': paper.get('primary_topic', ''),
-                                'is_retracted': paper.get('is_retracted', False)
+                                'institution_id': str(institution.get('id', '') or ''),
+                                'institution_name': str(institution.get('name', '') or ''),
+                                'institution_country': str(institution.get('country', '') or ''),
+                                'institution_type': str(institution.get('type', '') or ''),
+                                'raw_affiliation': str(institution.get('raw', '') or ''),
+                                'fwci': float(paper.get('fwci', 0) or 0),
+                                'citation_percentile': int(paper.get('citation_percentile', 0) or 0),
+                                'primary_topic': str(paper.get('primary_topic', '') or ''),
+                                'is_retracted': bool(paper.get('is_retracted', False))
                             })
 
-                    # 写入CSV
-                    append_rows_to_csv(rows, csv_file)
+                    # 写入ClickHouse
+                    batch_insert_clickhouse(ch_client, rows)
 
                     # 更新统计
                     total_papers += len(all_papers)
@@ -429,9 +510,9 @@ async def fetch_openalex_day(
                 total_authors = len(authors)
 
                 for author_info in authors:
-                    author_id = author_info.get('id', '')
-                    author_name = author_info['name']
-                    rank = author_info['rank']
+                    author_id = author_info.get('id', '') or ''
+                    author_name = author_info.get('name', '') or ''
+                    rank = author_info.get('rank', 1) or 1
 
                     tag = '其他'
                     if rank == 1:
@@ -439,21 +520,33 @@ async def fetch_openalex_day(
                     elif rank == total_authors:
                         tag = '最后作者'
 
+                    # 获取机构信息
+                    institution = author_info.get('institution', {}) or {}
+
                     rows.append({
-                        'author_id': author_id,
-                        'author': author_name,
-                        'uid': paper['uid'],
-                        'doi': paper['doi'],
-                        'title': paper['title'],
-                        'rank': rank,
-                        'journal': paper['journal'],
-                        'citation_count': paper['citation_count'],
-                        'tag': tag,
-                        'state': ''
+                        'author_id': str(author_id) if author_id else '',
+                        'author': str(author_name) if author_name else '',
+                        'uid': str(paper.get('uid', '') or ''),
+                        'doi': str(paper.get('doi', '') or ''),
+                        'title': str(paper.get('title', '') or ''),
+                        'rank': int(rank) if rank else 1,
+                        'journal': str(paper.get('journal', '') or ''),
+                        'citation_count': int(paper.get('citation_count', 0) or 0),
+                        'tag': str(tag),
+                        'state': '',
+                        'institution_id': str(institution.get('id', '') or ''),
+                        'institution_name': str(institution.get('name', '') or ''),
+                        'institution_country': str(institution.get('country', '') or ''),
+                        'institution_type': str(institution.get('type', '') or ''),
+                        'raw_affiliation': str(institution.get('raw', '') or ''),
+                        'fwci': float(paper.get('fwci', 0) or 0),
+                        'citation_percentile': int(paper.get('citation_percentile', 0) or 0),
+                        'primary_topic': str(paper.get('primary_topic', '') or ''),
+                        'is_retracted': bool(paper.get('is_retracted', False))
                     })
 
-            # 写入CSV
-            append_rows_to_csv(rows, csv_file)
+            # 写入ClickHouse
+            batch_insert_clickhouse(ch_client, rows)
 
             # 更新统计
             total_papers += len(all_papers)
@@ -480,7 +573,6 @@ async def fetch_openalex_day(
                 'date_str': date_str,
                 'paper_count': total_papers,
                 'row_count': total_rows,
-                'csv_file': csv_file,
                 'write_count': write_count,
                 'error': None
             }
@@ -508,23 +600,6 @@ def get_all_dates_backward() -> List[str]:
         current -= timedelta(days=1)
 
     return dates
-
-
-def get_daily_csv_filename(date_str: str) -> str:
-    """
-    获取每日CSV文件名（按年月组织文件夹，按天命名文件）
-    新结构：output/openalex/2026/04/2026-04-10.csv
-    """
-    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-    year = date_obj.year
-    month = date_obj.month
-
-    # 创建年/月文件夹结构
-    output_dir = f'/home/apl064/apl/academic-scraper/output/openalex/{year}/{month:02d}'
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 返回日期文件路径
-    return os.path.join(output_dir, f'{date_str}.csv')
 
 
 async def check_api_quota():
@@ -588,12 +663,17 @@ async def check_api_quota():
 async def main_async():
     """异步主函数"""
     print("=" * 60)
-    print("OpenAlex 论文自动获取工具 - 极速版 ⚡")
+    print("OpenAlex 论文自动获取工具 - ClickHouse版 ⚡")
     print("=" * 60)
     print()
 
-    # 创建输出目录
-    os.makedirs('output/openalex', exist_ok=True)
+    # 创建ClickHouse客户端
+    print("📡 连接ClickHouse...")
+    ch_client = create_clickhouse_client()
+    if not ch_client:
+        print("\n🛑 无法连接到ClickHouse，程序终止")
+        return
+    print()
 
     # 设置日志
     setup_logging()
@@ -676,7 +756,7 @@ async def main_async():
 
             # 创建所有任务
             tasks = [
-                fetch_openalex_day(client, date_str, semaphore, day_pbar, paper_pbar, progress, progress_lock)
+                fetch_openalex_day(client, ch_client, date_str, semaphore, day_pbar, paper_pbar, progress, progress_lock)
                 for date_str in pending_dates
             ]
 
@@ -712,8 +792,7 @@ async def main_async():
                     log_fetch_result(
                         result['date_str'],
                         paper_count,
-                        result.get('row_count', 0),
-                        result.get('csv_file', '')
+                        result.get('row_count', 0)
                     )
 
         elapsed_time = time.time() - start_time
@@ -735,7 +814,7 @@ async def main_async():
     print(f"   - 行数: {total_rows} 行")
     print(f"   - 耗时: {elapsed_time:.2f} 秒 ({elapsed_time/3600:.2f} 小时)")
     print(f"   - 速度: {total_papers/elapsed_time:.1f} 篇/秒")
-    print(f"📁 数据文件: output/")
+    print(f"💾 数据已写入ClickHouse: {CH_DATABASE}.{CH_TABLE}")
     print(f"📝 日志文件: {LOG_FILE}")
     print("=" * 60)
 

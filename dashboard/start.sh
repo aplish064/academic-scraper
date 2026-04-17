@@ -1,12 +1,13 @@
 #!/bin/bash
-# 学术数据看板启动脚本
+# 学术数据看板启动脚本（使用虚拟环境）
 
-echo "📊 学术数据看板启动中..."
-echo ""
+echo "🚀 启动学术数据看板..."
 
-# 检查Python
-if ! command -v python3 &> /dev/null; then
-    echo "❌ 错误: 未找到 python3"
+# 检查虚拟环境
+VENV_PATH="../venv/bin/python3"
+if [ ! -f "$VENV_PATH" ]; then
+    echo "❌ 虚拟环境不存在: $VENV_PATH"
+    echo "请先创建虚拟环境: cd .. && python3 -m venv venv"
     exit 1
 fi
 
@@ -15,30 +16,37 @@ cd "$(dirname "$0")"
 
 # 检查依赖
 echo "📦 检查依赖..."
-python3 -c "import flask, flask_cors, pandas, clickhouse_connect" 2>/dev/null
+$VENV_PATH -c "
+import flask, flask_cors, clickhouse_connect
+print('✓ 所有依赖已安装')
+" 2>/dev/null
+
 if [ $? -ne 0 ]; then
-    echo "📦 安装依赖中..."
-    pip3 install -r requirements.txt
+    echo "❌ 缺少依赖，正在安装..."
+    ../venv/bin/pip install flask flask-cors clickhouse_connect
 fi
 
 # 检查ClickHouse连接
 echo "📡 检查ClickHouse连接..."
-curl -s http://localhost:8123/ping > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "❌ 错误: 无法连接到ClickHouse服务"
-    echo "请确保ClickHouse服务正在运行："
-    echo "  sudo systemctl start clickhouse-server"
+if ! clickhouse-client --query "SELECT 1" &> /dev/null; then
+    echo "❌ ClickHouse服务未运行，请先启动ClickHouse"
     exit 1
 fi
 
-echo "✓ ClickHouse连接正常"
+# 检查数据表
+echo "📊 检查数据表..."
+openalex_count=$(clickhouse-client --query "SELECT count() FROM academic_db.OpenAlex" 2>/dev/null || echo "0")
+semantic_count=$(clickhouse-client --query "SELECT count() FROM academic_db.semantic" 2>/dev/null || echo "0")
+
+echo "✓ OpenAlex: $(printf "%'d" $openalex_count) 条记录"
+echo "✓ Semantic: $(printf "%'d" $semantic_count) 条记录"
 echo ""
 
 # 启动服务
-echo "🚀 启动服务..."
-echo "📍 访问地址: http://localhost:5000"
+echo "🌐 启动Web服务..."
+echo "📍 访问地址: http://localhost:8080"
 echo "📡 数据库: ClickHouse"
 echo "⏹️  按 Ctrl+C 停止服务"
 echo ""
 
-python3 api_server.py
+$VENV_PATH api_server.py
