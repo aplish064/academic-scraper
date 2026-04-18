@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 学术数据看板API服务器 - 支持Redis缓存和去重统计
+- 启动时预加载所有数据源缓存
+- 后台线程每2分钟自动刷新缓存
 """
 
 import time
@@ -29,8 +31,12 @@ ch_client = None
 redis_client = None
 USE_CACHE = True
 
-# 全局客户端
-ch_client = None
+# 缓存刷新间隔（秒）
+CACHE_REFRESH_INTERVAL = 120  # 2分钟
+
+# 后台刷新线程
+cache_refresh_thread = None
+cache_refresh_running = False
 
 def get_table_name():
     """根据请求参数获取表名"""
@@ -104,6 +110,135 @@ def query_clickhouse(sql, params=None):
         print(f"❌ 查询失败: {e}")
         return None
 
+
+def query_total_unique_journals():
+    """查询两个表的总唯一期刊数（去重）"""
+    try:
+        client = get_ch_client()
+        if not client:
+            return 0
+
+        # 使用UNION ALL获取两个表的所有期刊，然后去重
+        journal_sql = """
+        SELECT uniqExact(journal) as count
+        FROM (
+            SELECT journal FROM OpenAlex
+            UNION ALL
+            SELECT journal FROM semantic
+        )
+        WHERE journal != ''
+        """
+
+        result = client.query(journal_sql)
+        if result and result.result_rows:
+            return result.result_rows[0][0]
+        return 0
+    except Exception as e:
+        print(f"⚠️  查询总期刊数失败: {e}")
+        return 0
+
+
+def try_merge_from_cache():
+    """尝试从openalex和semantic缓存合并数据"""
+    if not USE_CACHE or not redis_client:
+        return None
+
+    # 获取openalex和semantic的缓存
+    openalex_cache = get_from_cache(get_cache_key('openalex'))
+    semantic_cache = get_from_cache(get_cache_key('semantic'))
+
+    # 检查两个缓存是否都存在且完整
+    if not openalex_cache or not semantic_cache:
+        return None
+
+    # 验证数据完整性
+    openalex_stats = openalex_cache.get('statistics', {})
+    semantic_stats = semantic_cache.get('statistics', {})
+
+    if (openalex_stats.get('total_papers', 0) == 0 or
+        semantic_stats.get('total_papers', 0) == 0):
+        return None
+
+    try:
+        # 合并数据
+        merged_data = {
+            'papers_by_date': {},
+            'citations_distribution': {},
+            'author_types': {},
+            'top_journals': {},
+            'top_countries': {},
+            'institution_types': {},
+            'fwci_distribution': {},
+            'statistics': {},
+            'source': 'all',
+            'table': 'all',
+            '_source_data': {
+                'openalex': openalex_cache,
+                'semantic': semantic_cache
+            }
+        }
+
+        # 合并论文按日期统计
+        for date, count in openalex_cache.get('papers_by_date', {}).items():
+            merged_data['papers_by_date'][date] = merged_data['papers_by_date'].get(date, 0) + count
+
+        for date, count in semantic_cache.get('papers_by_date', {}).items():
+            merged_data['papers_by_date'][date] = merged_data['papers_by_date'].get(date, 0) + count
+
+        # 合并引用数分布
+        for range_key, count in openalex_cache.get('citations_distribution', {}).items():
+            merged_data['citations_distribution'][range_key] = merged_data['citations_distribution'].get(range_key, 0) + count
+
+        for range_key, count in semantic_cache.get('citations_distribution', {}).items():
+            merged_data['citations_distribution'][range_key] = merged_data['citations_distribution'].get(range_key, 0) + count
+
+        # 合并作者类型
+        for tag, count in openalex_cache.get('author_types', {}).items():
+            merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
+
+        for tag, count in semantic_cache.get('author_types', {}).items():
+            merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
+
+        # 合并Top期刊（取并集，保留最高值）
+        all_journals = {}
+        for journal, count in openalex_cache.get('top_journals', {}).items():
+            all_journals[journal] = all_journals.get(journal, 0) + count
+
+        for journal, count in semantic_cache.get('top_journals', {}).items():
+            all_journals[journal] = all_journals.get(journal, 0) + count
+
+        # 按数量排序，取前50
+        sorted_journals = sorted(all_journals.items(), key=lambda x: x[1], reverse=True)[:50]
+        merged_data['top_journals'] = dict(sorted_journals)
+
+        # 合并Top国家（只有openalex有）
+        merged_data['top_countries'] = openalex_cache.get('top_countries', {})
+
+        # 合并机构类型（只有openalex有）
+        merged_data['institution_types'] = openalex_cache.get('institution_types', {})
+
+        # 合并FWCI分布（只有openalex有）
+        merged_data['fwci_distribution'] = openalex_cache.get('fwci_distribution', {})
+
+        # 合并统计数据
+        # 对于unique_journals，需要查询数据库获取准确的总数（因为两个数据源可能有重复期刊）
+        total_journals = query_total_unique_journals()
+
+        merged_data['statistics'] = {
+            'total_papers': openalex_stats.get('total_papers', 0) + semantic_stats.get('total_papers', 0),
+            'unique_authors': openalex_stats.get('unique_authors', 0) + semantic_stats.get('unique_authors', 0),
+            'unique_journals': total_journals if total_journals > 0 else len(all_journals),
+            'unique_institutions': openalex_stats.get('unique_institutions', 0),  # 只有openalex有
+            'high_citations': openalex_stats.get('high_citations', 0) + semantic_stats.get('high_citations', 0),
+            'avg_fwci': openalex_stats.get('avg_fwci', 0)  # 只使用openalex的FWCI
+        }
+
+        return merged_data
+
+    except Exception as e:
+        print(f"⚠️  合并缓存数据失败: {e}")
+        return None
+
 @app.route('/')
 def index():
     """主页"""
@@ -141,9 +276,17 @@ def get_aggregated_data():
     if cached_data:
         return jsonify(cached_data)
 
-    # 如果是全部数据，需要聚合两个表
+    # 如果是全部数据，尝试从已有缓存合并
     if source == 'all':
-        return get_all_sources_data()
+        # 优先检查是否可以从openalex和semantic缓存合并
+        merged_data = try_merge_from_cache()
+        if merged_data:
+            print("🚀 从openalex和semantic缓存合并数据（无需重新查询）")
+            set_to_cache(cache_key, merged_data, ttl=120)
+            return jsonify(merged_data)
+        else:
+            # 缓存不完整，重新查询数据库
+            return get_all_sources_data()
 
     # 智能缓存：检查"全部数据"缓存中是否有该数据源的独立数据
     if source in ['openalex', 'semantic']:
@@ -244,30 +387,17 @@ def get_aggregated_data():
         # 2. 按论文发表日期统计 - 精确到月份，使用DOI去重
         step_start = time.time()
         print(f"[步骤 2/8] 按日期统计...")
-        if source == 'openalex':
-            # OpenAlex表有publication_date字段，提取年月
-            date_sql = f"""
-            SELECT
-                formatDateTime(toDateOrNull(publication_date), '%Y-%m') as date,
-                uniqHLL12(doi) as count
-            FROM {table_name}
-            WHERE publication_date != '' AND length(publication_date) > 0
-            GROUP BY formatDateTime(toDateOrNull(publication_date), '%Y-%m')
-            ORDER BY date DESC
-            SETTINGS max_threads=1
-            """
-        else:
-            # Semantic表使用year字段，转换为YYYY-01格式
-            date_sql = f"""
-            SELECT
-                concat(toString(year), '-01') as date,
-                uniqHLL12(doi) as count
-            FROM {table_name}
-            WHERE year > 0
-            GROUP BY concat(toString(year), '-01')
-            ORDER BY date DESC
-            SETTINGS max_threads=1
-            """
+        # 统一使用publication_date字段提取年月
+        date_sql = f"""
+        SELECT
+            formatDateTime(toDateOrNull(publication_date), '%Y-%m') as date,
+            uniqHLL12(doi) as count
+        FROM {table_name}
+        WHERE publication_date != '' AND length(publication_date) > 0
+        GROUP BY formatDateTime(toDateOrNull(publication_date), '%Y-%m')
+        ORDER BY date DESC
+        SETTINGS max_threads=1
+        """
 
         date_result = query_clickhouse(date_sql)
         if date_result:
@@ -567,29 +697,17 @@ def get_all_sources_data():
                     source_unique_institutions = unique_institutions
 
             # 2. 按日期统计 - 精确到月份
-            if source == 'openalex':
-                date_sql = f"""
-                SELECT
-                    formatDateTime(toDateOrNull(publication_date), '%Y-%m') as date,
-                    uniqHLL12(doi) as count
-                FROM {table}
-                WHERE publication_date != '' AND length(publication_date) > 0
-                GROUP BY formatDateTime(toDateOrNull(publication_date), '%Y-%m')
-                ORDER BY date DESC
-                SETTINGS max_threads=1
-                """
-            else:
-                # Semantic表只有年份，转换为YYYY-01格式
-                date_sql = f"""
-                SELECT
-                    concat(toString(year), '-01') as date,
-                    uniqHLL12(doi) as count
-                FROM {table}
-                WHERE year > 0
-                GROUP BY concat(toString(year), '-01')
-                ORDER BY date DESC
-                SETTINGS max_threads=1
-                """
+            # 统一使用publication_date字段提取年月
+            date_sql = f"""
+            SELECT
+                formatDateTime(toDateOrNull(publication_date), '%Y-%m') as date,
+                uniqHLL12(doi) as count
+            FROM {table}
+            WHERE publication_date != '' AND length(publication_date) > 0
+            GROUP BY formatDateTime(toDateOrNull(publication_date), '%Y-%m')
+            ORDER BY date DESC
+            SETTINGS max_threads=1
+            """
 
             date_result = query_clickhouse(date_sql)
             if date_result:
@@ -843,6 +961,73 @@ def health_check():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+
+def preload_all_caches():
+    """预加载所有数据源的缓存（通过HTTP请求）"""
+    if not USE_CACHE or not redis_client:
+        print("⚠️  缓存未启用，跳过预加载")
+        return
+
+    sources = ['openalex', 'semantic', 'all']
+
+    for source in sources:
+        print(f"  📦 预加载 {source} 数据源...")
+        try:
+            import requests
+            # 使用较短的超时时间，避免长时间等待
+            response = requests.get(f'http://localhost:8080/api/aggregated?source={source}', timeout=300)
+            if response.status_code == 200:
+                print(f"    ✅ {source} 缓存加载成功")
+            else:
+                print(f"    ❌ {source} 缓存加载失败: {response.status_code}")
+        except requests.exceptions.ConnectionError:
+            print(f"    ⚠️  {source} 连接失败（服务器可能还未完全启动）")
+        except Exception as e:
+            print(f"    ❌ {source} 缓存加载异常: {e}")
+
+    print("  ✅ 所有数据源缓存预加载完成")
+
+
+def start_cache_refresh_thread():
+    """启动后台缓存刷新线程"""
+    global cache_refresh_thread, cache_refresh_running
+
+    if not USE_CACHE or not redis_client:
+        print("⚠️  缓存未启用，跳过后台刷新")
+        return
+
+    cache_refresh_running = True
+    cache_refresh_thread = threading.Thread(target=cache_refresh_worker, daemon=True)
+    cache_refresh_thread.start()
+    print(f"✅ 后台缓存刷新线程已启动（间隔: {CACHE_REFRESH_INTERVAL}秒）")
+
+
+def cache_refresh_worker():
+    """后台缓存刷新工作线程"""
+    global cache_refresh_running
+
+    while cache_refresh_running:
+        try:
+            time.sleep(CACHE_REFRESH_INTERVAL)
+
+            if not cache_refresh_running:
+                break
+
+            print(f"\n{'='*60}")
+            print(f"🔄 开始自动刷新缓存...")
+            print(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"{'='*60}")
+
+            preload_all_caches()
+
+            print(f"✅ 缓存刷新完成")
+            print(f"{'='*60}\n")
+
+        except Exception as e:
+            print(f"❌ 缓存刷新失败: {e}")
+            import traceback
+            traceback.print_exc()
+
 if __name__ == '__main__':
     print("🚀 启动学术数据看板服务")
     print(f"📡 ClickHouse: {CLICKHOUSE_CONFIG['host']}:{CLICKHOUSE_CONFIG['port']}/{CLICKHOUSE_CONFIG['database']}")
@@ -882,4 +1067,32 @@ if __name__ == '__main__':
                 print(f"  ❌ {source} 缓存清除失败: {e}")
         print("="*60 + "\n")
 
+    # 设置缓存预加载和后台刷新（在Flask启动后自动执行）
+    if USE_CACHE:
+        from threading import Timer
+
+        def delayed_cache_init():
+            """延迟执行缓存初始化"""
+            # 等待Flask完全启动
+            time.sleep(5)
+
+            print("\n" + "="*60)
+            print("🚀 启动缓存预加载...")
+            print("="*60)
+            preload_all_caches()
+
+            # 启动后台缓存刷新线程
+            print("\n" + "="*60)
+            print("🔄 启动后台缓存刷新线程...")
+            print("="*60)
+            start_cache_refresh_thread()
+            print("✅ 缓存将每2分钟自动刷新")
+            print("="*60 + "\n")
+
+        # 立即启动Timer，在app.run()执行时开始计时
+        cache_timer = Timer(0, delayed_cache_init)
+        cache_timer.daemon = True
+        cache_timer.start()
+
+    # 启动Flask服务器
     app.run(**FLASK_CONFIG)

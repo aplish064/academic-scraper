@@ -105,6 +105,35 @@
             margin-bottom: 2rem;
         }
 
+        /* OpenAlex专用：压缩统计卡片到一行 */
+        .stats-grid.openalex-compact {
+            grid-template-columns: repeat(6, 1fr);
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stats-grid.openalex-compact .stat-card {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            min-height: 60px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .stats-grid.openalex-compact .stat-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        .stats-grid.openalex-compact .stat-value {
+            font-size: 1.1rem;
+            line-height: 1.2;
+        }
+
         .stat-card {
             background: var(--white);
             padding: 1.5rem;
@@ -667,6 +696,15 @@
                 // Update statistics from aggregated data
                 const stats = data.statistics;
                 console.log('统计数据:', stats);
+
+                // 根据数据源调整统计卡片布局
+                const statsGrid = document.querySelector('.stats-grid');
+                if (data.source === 'openalex') {
+                    statsGrid.classList.add('openalex-compact');
+                } else {
+                    statsGrid.classList.remove('openalex-compact');
+                }
+
                 animateNumber(document.getElementById('totalPapers'), stats.total_papers);
                 animateNumber(document.getElementById('totalAuthors'), stats.unique_authors);
                 animateNumber(document.getElementById('totalJournals'), stats.unique_journals);
@@ -832,7 +870,7 @@
         function createPapersTrendChartFromAggregated(papersByDate) {
             const sortedDates = Object.keys(papersByDate).sort();
             const data = sortedDates.map(d => papersByDate[d]);
-            const yearLabels = sortedDates.map(d => d.split('-')[0]);  // 只显示年份
+            const labels = sortedDates;  // 显示完整年月（YYYY-MM）
 
             if (charts.papersTrend) charts.papersTrend.destroy();
 
@@ -840,7 +878,7 @@
             charts.papersTrend = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: yearLabels,
+                    labels: labels,
                     datasets: [{
                         label: '论文数量',
                         data: data,

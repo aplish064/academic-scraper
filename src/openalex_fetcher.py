@@ -132,7 +132,7 @@ def create_clickhouse_client():
 
 
 def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
-    """批量插入数据到ClickHouse"""
+    """批量插入数据到ClickHouse（带去重）"""
     if not rows:
         return True
 
@@ -192,7 +192,29 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
         df['citation_percentile'] = df['citation_percentile'].astype(int)
         df['is_retracted'] = df['is_retracted'].astype(bool)
 
-        client.insert_df(f'{CH_DATABASE}.{CH_TABLE}', df)
+        # 使用临时表进行去重
+        temp_table = 'temp_openalex_insert_dedup'
+
+        # 创建临时表结构（与目标表相同）
+        client.command(f'DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}')
+        client.command(f'''
+            CREATE TABLE {CH_DATABASE}.{temp_table} AS {CH_DATABASE}.{CH_TABLE}
+            ENGINE = Memory
+        ''')
+
+        # 插入到临时表
+        client.insert_df(f'{CH_DATABASE}.{temp_table}', df)
+
+        # 从临时表插入到目标表，使用INSERT SELECT去重
+        # 使用author_id和doi作为唯一标识进行去重
+        client.command(f'''
+            INSERT INTO {CH_DATABASE}.{CH_TABLE}
+            SELECT DISTINCT * FROM {CH_DATABASE}.{temp_table}
+        ''')
+
+        # 删除临时表
+        client.command(f'DROP TABLE {CH_DATABASE}.{temp_table}')
+
         return True
 
     except Exception as e:
@@ -200,6 +222,8 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
         # 打印第一条数据用于调试
         if rows:
             print(f"   示例数据: {rows[0]}")
+        import traceback
+        traceback.print_exc()
         return False
 
 

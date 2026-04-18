@@ -155,7 +155,7 @@ def create_clickhouse_client():
 
 
 def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
-    """批量插入数据到ClickHouse"""
+    """批量插入数据到ClickHouse（带去重）"""
     if not rows:
         return True
 
@@ -165,7 +165,17 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
             cleaned_row = {}
             for key, value in row.items():
                 if value is None:
-                    cleaned_row[key] = 0 if key in ['rank', 'citation_count', 'year'] else ''
+                    if key in ['rank', 'citation_count', 'year']:
+                        cleaned_row[key] = 0
+                    elif key in ['import_date', 'import_time']:
+                        # 使用当前时间作为默认值
+                        from datetime import datetime
+                        if key == 'import_date':
+                            cleaned_row[key] = datetime.now().date()
+                        else:
+                            cleaned_row[key] = datetime.now()
+                    else:
+                        cleaned_row[key] = ''
                 elif key in ['rank', 'citation_count', 'year']:
                     try:
                         num_value = int(value)
@@ -179,6 +189,9 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
                             cleaned_row[key] = num_value
                     except (ValueError, TypeError):
                         cleaned_row[key] = 0
+                elif key in ['import_date', 'import_time']:
+                    # 保留datetime对象
+                    cleaned_row[key] = value
                 else:
                     cleaned_row[key] = str(value) if value is not None else ''
             cleaned_rows.append(cleaned_row)
@@ -188,11 +201,34 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
         df['citation_count'] = df['citation_count'].astype('uint32')
         df['year'] = df['year'].astype('uint16')
 
-        client.insert_df(f'{CH_DATABASE}.{CH_TABLE}', df)
+        # 使用临时表进行去重
+        temp_table = 'temp_insert_dedup'
+
+        # 创建临时表结构（与目标表相同）
+        client.command(f'DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}')
+        client.command(f'''
+            CREATE TABLE {CH_DATABASE}.{temp_table} AS {CH_DATABASE}.{CH_TABLE}
+            ENGINE = Memory
+        ''')
+
+        # 插入到临时表
+        client.insert_df(f'{CH_DATABASE}.{temp_table}', df)
+
+        # 从临时表插入到目标表，使用INSERT SELECT去重
+        client.command(f'''
+            INSERT INTO {CH_DATABASE}.{CH_TABLE}
+            SELECT DISTINCT * FROM {CH_DATABASE}.{temp_table}
+        ''')
+
+        # 删除临时表
+        client.command(f'DROP TABLE {CH_DATABASE}.{temp_table}')
+
         return True
 
     except Exception as e:
         log_message(f"❌ 插入失败: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -219,6 +255,11 @@ def paper_to_rows(paper):
 
     authors = paper.get("authors", [])
 
+    # 添加导入时间戳
+    from datetime import datetime
+    import_date = datetime.now().date()
+    import_time = datetime.now()
+
     if not authors:
         rows.append({
             "author_id": "", "author": "", "uid": uid, "doi": doi, "title": title,
@@ -226,7 +267,8 @@ def paper_to_rows(paper):
             "state": "fetched", "institution_id": "", "institution_name": "",
             "institution_country": "", "institution_type": "", "raw_affiliation": "",
             "year": year, "publication_date": pub_date, "venue": venue, "journal_name": journal_name,
-            "arxiv_id": arxiv_id, "pubmed_id": pubmed_id, "url": url, "abstract": abstract
+            "arxiv_id": arxiv_id, "pubmed_id": pubmed_id, "url": url, "abstract": abstract,
+            "import_date": import_date, "import_time": import_time
         })
     else:
         total_authors = len(authors)
@@ -239,7 +281,8 @@ def paper_to_rows(paper):
                 "institution_id": "", "institution_name": "", "institution_country": "",
                 "institution_type": "", "raw_affiliation": "", "year": year,
                 "publication_date": pub_date, "venue": venue, "journal_name": journal_name,
-                "arxiv_id": arxiv_id, "pubmed_id": pubmed_id, "url": url, "abstract": abstract
+                "arxiv_id": arxiv_id, "pubmed_id": pubmed_id, "url": url, "abstract": abstract,
+                "import_date": import_date, "import_time": import_time
             })
 
     return rows
