@@ -28,6 +28,37 @@ python3 temp/merge_csv.py
 pip install httpx tqdm
 ```
 
+### Environment Setup
+
+**IMPORTANT - Always use virtual environment for testing and running:**
+
+The project uses a Python virtual environment located at `/home/hkustgz/Us/academic-scraper/venv`. All dependencies are already installed there.
+
+**When running or testing any Python code:**
+```bash
+# Use the virtual environment Python
+/home/hkustgz/Us/academic-scraper/venv/bin/python <script>
+
+# Or activate the virtual environment first
+source /home/hkustgz/Us/academic-scraper/venv/bin/activate
+python <script>
+```
+
+**Examples:**
+```bash
+# Running the dashboard API server
+cd /home/hkustgz/Us/academic-scraper/dashboard
+../venv/bin/python api_server.py
+
+# Running database queries
+/home/hkustgz/Us/academic-scraper/venv/bin/python -c "import clickhouse_connect; ..."
+
+# Installing packages (if needed)
+/home/hkustgz/Us/academic-scraper/venv/bin/pip install <package>
+```
+
+**Never use system Python3 directly** - it may not have all required packages installed, causing import errors.
+
 ## Architecture
 
 ### Core Components

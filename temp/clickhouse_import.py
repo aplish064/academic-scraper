@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-将CSV数据导入到ClickHouse
+将CSV数据导入到ClickHouse（包含publication_date）
 """
 
 import clickhouse_connect
@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 from datetime import datetime
 import sys
+import re
 
 # ClickHouse连接配置
 CH_HOST = 'localhost'
@@ -15,10 +16,20 @@ CH_PORT = 8123
 CH_DATABASE = 'academic_db'
 CH_USERNAME = 'default'
 CH_PASSWORD = ''
-CH_TABLE = 'papers'
+CH_TABLE = 'OpenAlex'
 
 # CSV数据目录
 DATA_DIR = Path(__file__).parent.parent / 'output' / 'openalex'
+
+def extract_date_from_filename(csv_file):
+    """从CSV文件名提取发表日期"""
+    filename = csv_file.name
+    # 匹配格式: 2025-04-02.csv, 2024-03-05.csv
+    match = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', filename)
+    if match:
+        year, month, day = match.groups()
+        return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+    return None
 
 def create_connection():
     """创建ClickHouse连接（先连接到default数据库）"""
@@ -47,7 +58,7 @@ def create_database(client):
         sys.exit(1)
 
 def create_table(client):
-    """创建数据表"""
+    """创建数据表（包含所有CSV字段，自动去重）"""
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {CH_DATABASE}.{CH_TABLE} (
         author_id String,
@@ -69,10 +80,9 @@ def create_table(client):
         citation_percentile UInt8,
         primary_topic String,
         is_retracted Bool,
-        import_date Date DEFAULT today(),
-        import_time DateTime DEFAULT now()
+        publication_date String
     )
-    ENGINE = MergeTree()
+    ENGINE = ReplacingMergeTree()
     ORDER BY (author_id, doi)
     SETTINGS index_granularity = 8192
     """
@@ -127,24 +137,55 @@ def import_csv_files(client, limit=None):
             # 读取CSV（使用多种方式尝试）
             df = None
             try:
-                # 方法1：标准读取
-                df = pd.read_csv(csv_file, encoding='utf-8-sig', low_memory=False)
+                # 方法1：标准读取（增加缓冲区大小）
+                df = pd.read_csv(csv_file,
+                               encoding='utf-8-sig',
+                               low_memory=False,
+                               engine='c',  # C引擎更快
+                               on_bad_lines='warn',  # 警告但不跳过
+                               quoting=1)  # QUOTE_ALL
             except Exception as e:
+                print(f"  ⚠️  标准读取失败: {str(e)[:100]}")
                 try:
-                    # 方法2：忽略错误行
-                    df = pd.read_csv(csv_file, encoding='utf-8-sig', low_memory=False,
-                                   on_bad_lines='skip', engine='python')
-                    print(f"  ⚠️  使用容错模式读取")
+                    # 方法2：Python引擎 + 更宽松的解析
+                    df = pd.read_csv(csv_file,
+                                   encoding='utf-8-sig',
+                                   low_memory=False,
+                                   engine='python',  # Python引擎更宽容
+                                   on_bad_lines='skip',  # 跳过错误行
+                                   quoting=1,
+                                   sep=',',
+                                   quotechar='"',
+                                   escapechar='\\')
+                    print(f"  ⚠️  使用容错模式读取（跳过错误行）")
                 except Exception as e2:
                     try:
-                        # 方法3：尝试不同编码
-                        df = pd.read_csv(csv_file, encoding='latin1', low_memory=False,
-                                       on_bad_lines='skip', engine='python')
-                        print(f"  ⚠️  使用备用编码读取")
+                        # 方法3：逐块读取（处理大文件）
+                        chunks = []
+                        for chunk in pd.read_csv(csv_file,
+                                               encoding='utf-8-sig',
+                                               low_memory=False,
+                                               engine='python',
+                                               on_bad_lines='skip',
+                                               chunksize=10000):
+                            chunks.append(chunk)
+                        df = pd.concat(chunks, ignore_index=True)
+                        print(f"  ⚠️  使用分块读取模式")
                     except Exception as e3:
-                        print(f"  ⚠️  读取失败: {e}")
-                        failed_files.append((csv_file.name, f"多重读取失败: {e}"))
-                        continue
+                        try:
+                            # 方法4：最后尝试 - 只读取需要的列
+                            required_cols = ['author_id', 'author', 'doi', 'title']
+                            df = pd.read_csv(csv_file,
+                                           encoding='utf-8-sig',
+                                           low_memory=False,
+                                           engine='python',
+                                           on_bad_lines='skip',
+                                           usecols=lambda x: x in required_cols or x in ['journal', 'citation_count', 'tag', 'state', 'institution_name', 'institution_country', 'institution_type', 'raw_affiliation', 'fwci', 'citation_percentile', 'primary_topic', 'is_retracted', 'uid', 'rank', 'institution_id'])
+                            print(f"  ⚠️  使用列过滤模式读取")
+                        except Exception as e4:
+                            print(f"  ❌ 所有读取方法都失败")
+                            failed_files.append((csv_file.name, f"读取失败: {str(e)[:100]}"))
+                            continue
 
             if df is None or df.empty:
                 print(f"  ⚠️  空文件，跳过")
@@ -157,7 +198,7 @@ def import_csv_files(client, limit=None):
                 continue
 
             # 检查必需字段
-            required_columns = ['author_id', 'doi', 'title']
+            required_columns = ['author', 'doi', 'title']
             missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
                 print(f"  ⚠️  缺少字段: {missing_columns}")
@@ -165,33 +206,17 @@ def import_csv_files(client, limit=None):
                 del df
                 continue
 
+            # 从文件名提取发表日期
+            publication_date = extract_date_from_filename(csv_file)
+            if publication_date:
+                print(f"  📅 发表日期: {publication_date}")
+            else:
+                print(f"  ⚠️  无法从文件名提取日期")
+
             # 数据类型转换和清理
             print(f"  📥 导入 {len(df)} 条记录...")
 
-            # 确保列存在，填充缺失的列
-            column_mapping = {
-                'author_id': 'author_id',
-                'author': 'author',
-                'uid': 'uid',
-                'doi': 'doi',
-                'title': 'title',
-                'rank': 'rank',
-                'journal': 'journal',
-                'citation_count': 'citation_count',
-                'tag': 'tag',
-                'state': 'state',
-                'institution_id': 'institution_id',
-                'institution_name': 'institution_name',
-                'institution_country': 'institution_country',
-                'institution_type': 'institution_type',
-                'raw_affiliation': 'raw_affiliation',
-                'fwci': 'fwci',
-                'citation_percentile': 'citation_percentile',
-                'primary_topic': 'primary_topic',
-                'is_retracted': 'is_retracted'
-            }
-
-            # 准备数据
+            # 准备数据（包含所有CSV字段）
             data_to_insert = []
             for _, row in df.iterrows():
                 try:
@@ -214,7 +239,8 @@ def import_csv_files(client, limit=None):
                         'fwci': float(row.get('fwci', 0) or 0),
                         'citation_percentile': int(row.get('citation_percentile', 0) or 0),
                         'primary_topic': str(row.get('primary_topic', '')),
-                        'is_retracted': str(row.get('is_retracted', 'False')).lower() == 'true'
+                        'is_retracted': str(row.get('is_retracted', 'False')).lower() == 'true',
+                        'publication_date': publication_date or ''
                     }
                     data_to_insert.append(record)
                 except Exception as e:
@@ -267,10 +293,11 @@ def import_csv_files(client, limit=None):
         print(f"✓ 表中总记录数: {final_count:,}")
 
         # 显示一些样本数据
-        sample = client.query(f"SELECT author, title, journal, citation_count FROM {CH_DATABASE}.{CH_TABLE} LIMIT 5")
+        sample = client.query(f"SELECT author, title, journal, publication_date, citation_count FROM {CH_DATABASE}.{CH_TABLE} LIMIT 5")
         print(f"\n📋 样本数据:")
         for row in sample.result_rows:
-            print(f"  - {row[0][:30]}: {row[1][:50]}... ({row[2]})")
+            pub_date = row[3] if row[3] else 'N/A'
+            print(f"  - {row[0][:30]}: {row[1][:50]}... ({row[2]}) [{pub_date}]")
 
     except Exception as e:
         print(f"❌ 验证失败: {e}")
