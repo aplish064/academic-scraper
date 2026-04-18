@@ -44,15 +44,14 @@ def get_table_name():
     return TABLES.get(source, TABLES[DEFAULT_TABLE])
 
 def get_ch_client():
-    """获取ClickHouse客户端"""
-    global ch_client
-    if ch_client is None:
-        try:
-            ch_client = clickhouse_connect.get_client(**CLICKHOUSE_CONFIG)
-        except Exception as e:
-            print(f"❌ 连接ClickHouse失败: {e}")
-            return None
-    return ch_client
+    """获取ClickHouse客户端 - 每次调用创建新实例避免并发冲突"""
+    try:
+        # 每次创建新客户端，避免并发查询冲突
+        client = clickhouse_connect.get_client(**CLICKHOUSE_CONFIG)
+        return client
+    except Exception as e:
+        print(f"❌ 连接ClickHouse失败: {e}")
+        return None
 
 def init_redis():
     """初始化Redis客户端"""
