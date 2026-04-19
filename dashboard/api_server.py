@@ -1155,30 +1155,10 @@ def get_graph_authors():
                 "code": "DB_CONNECTION_ERROR"
             }), 503
 
-        # 查询作者合作数据
-        query_sql = f"""
-        WITH combined_papers AS (
-            {get_merged_papers_sql(time_range, journal_keyword)}
-        ),
-        author_collaborations AS (
-            SELECT
-                p1.author_id as author_id,
-                p1.author as author_name,
-                p1.institution_name as institution,
-                p1.institution_country as country,
-                count(DISTINCT p2.author_id) as degree,
-                count(DISTINCT p1.doi) as paper_count,
-                sum(p1.citation_count) as citation_count
-            return jsonify({
-                "error": True,
-                "message": "数据库连接失败",
-                "code": "DB_CONNECTION_ERROR"
-            }), 503
-
         # 获取合并后的论文数据，并计算合作关系
         sql = f"""
         WITH combined_papers AS (
-            {get_merged_papers_sql(time_range)}
+            {get_merged_papers_sql(time_range, journal_keyword)}
         ),
         author_collaborations AS (
             SELECT
