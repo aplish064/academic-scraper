@@ -1034,7 +1034,8 @@ def get_merged_papers_sql(time_range="all"):
     time_filter = ""
     if time_range != "all":
         years = int(time_range)
-        time_filter = f"AND toYear(toDate(publication_date)) >= year(toDate(today())) - {years}"
+        # Use toDateOrNull to handle malformed dates, filter out NULL values
+        time_filter = f"AND toYear(toDateOrNull(publication_date)) >= year(toDate(today())) - {years} AND toDateOrNull(publication_date) IS NOT NULL"
 
     # 只选择两个表都有的字段
     common_fields = [
@@ -1044,6 +1045,15 @@ def get_merged_papers_sql(time_range="all"):
     ]
 
     fields_str = ', '.join(common_fields)
+
+    # Always filter out malformed dates
+    base_date_filter = "AND length(publication_date) >= 4"
+
+    # Add LIMIT to reduce dataset size for time-filtered queries
+    limit_clause = ""
+    if time_range != "all":
+        # Limit to 1M records for time-filtered queries to avoid memory limits
+        limit_clause = "LIMIT 1000000"
 
     return f"""
     WITH combined AS (
@@ -1064,11 +1074,12 @@ def get_merged_papers_sql(time_range="all"):
             argMax(institution_type, source_order) as institution_type,
             argMax(publication_date, source_order) as publication_date
         FROM (
-            SELECT {fields_str}, 1 as source_order FROM OpenAlex WHERE doi != '' {time_filter}
+            SELECT {fields_str}, 1 as source_order FROM OpenAlex PREWHERE doi != '' {base_date_filter} {time_filter}
             UNION ALL
-            SELECT {fields_str}, 2 as source_order FROM semantic WHERE doi != '' {time_filter}
+            SELECT {fields_str}, 2 as source_order FROM semantic PREWHERE doi != '' {base_date_filter} {time_filter}
         )
         GROUP BY doi, rank
+        {limit_clause}
     )
     SELECT * FROM combined
     """
@@ -1104,7 +1115,7 @@ def get_graph_authors():
                 "code": "INVALID_PARAMETER"
             }), 400
 
-        time_range = request.args.get('time_range', 'all')
+        time_range = request.args.get('time_range', '1')  # Default to last 1 year
 
         # 参数验证
         allowed_time_ranges = ["all", "1", "2", "3"]
@@ -1232,7 +1243,7 @@ def get_graph_edges():
                 "code": "INVALID_PARAMETER"
             }), 400
 
-        time_range = request.args.get('time_range', 'all')
+        time_range = request.args.get('time_range', '1')  # Default to last 1 year
 
         # 参数验证
         allowed_time_ranges = ["all", "1", "2", "3"]
@@ -1335,7 +1346,19 @@ def get_graph_stats():
     """获取图谱统计信息"""
     print("📊 查询图谱统计信息...")
     try:
-        cache_key = "graph:stats:all"
+        # 获取时间范围参数，默认为1年
+        time_range = request.args.get('time_range', '1')  # Default to last 1 year
+
+        # 参数验证
+        allowed_time_ranges = ["all", "1", "2", "3"]
+        if time_range not in allowed_time_ranges:
+            return jsonify({
+                "error": True,
+                "message": f"time_range must be one of {allowed_time_ranges}",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        cache_key = get_graph_cache_key('stats', time_range=time_range)
         cached = get_from_cache(cache_key)
         if cached:
             return jsonify(cached)
@@ -1351,7 +1374,7 @@ def get_graph_stats():
         # 查询统计数据
         stats_sql = f"""
         WITH combined_papers AS (
-            {get_merged_papers_sql('all')}
+            {get_merged_papers_sql(time_range)}
         ),
         paper_stats AS (
             SELECT count(DISTINCT doi) as total_papers FROM combined_papers
