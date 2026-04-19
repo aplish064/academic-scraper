@@ -7,12 +7,16 @@ Semantic Scholar Paper Fetcher - 漏斗式分层获取法
 import requests
 import json
 import time
+import os
 from datetime import datetime
 from pathlib import Path
 import clickhouse_connect
 import pandas as pd
 from typing import List, Dict, Any
 from tqdm import tqdm
+
+# 获取脚本所在目录的绝对路径
+SCRIPT_DIR = Path(__file__).parent.parent.absolute()
 
 # ============ 配置参数 ============
 API_KEY = "7Tts2u4jXLaebjvFPICkE7kpTJQvUaYG4byRSpBp"
@@ -39,9 +43,10 @@ MAX_OFFSET = 900         # 最大offset（10页）
 # 分页配置
 PAPERS_PER_REQUEST = 100 # 每次请求获取的论文数
 
-# 输出配置
-PROGRESS_FILE = Path("log/semantic_scholar_progress.json")
-LOG_FILE = Path("log/semantic_scholar_fetch.log")
+# 输出配置 - 使用绝对路径
+LOG_DIR = SCRIPT_DIR / "log"
+PROGRESS_FILE = LOG_DIR / "semantic_scholar_progress.json"
+LOG_FILE = LOG_DIR / "semantic_scholar_fetch.log"
 
 
 # ============ 漏斗式分层策略 ============
