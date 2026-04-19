@@ -1,254 +1,189 @@
-// D3.js Force-Directed Graph for Author Collaboration Network
-// Renders interactive node-link diagram with physics simulation
-
 /**
- * Main function to render the D3.js force-directed graph
- * @param {Object} data - Graph data with nodes and links
- * @param {Array} data.nodes - Array of node objects (authors)
- * @param {Array} data.links - Array of link objects (collaborations)
+ * D3.js 力导向图 - 作者合作关系图谱
+ * 从TypeScript参考实现转换为JavaScript
  */
-export function renderGraph(data) {
-  if (!data || !data.nodes || !data.links) {
-    console.error('Invalid graph data:', data);
-    return;
+
+export function renderGraph(svgEl, data, opts = {}) {
+  const svg = d3.select(svgEl);
+  svg.selectAll("*").remove();
+
+  const width = svgEl.clientWidth || 1200;
+  const height = svgEl.clientHeight || 800;
+  svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+  // 定义高斯模糊滤镜（光晕效果）
+  const defs = svg.append("defs");
+  defs.append("filter")
+    .attr("id", "graph-node-glow")
+    .attr("x", "-50%")
+    .attr("y", "-50%")
+    .attr("width", "200%")
+    .attr("height", "200%")
+    .append("feGaussianBlur")
+    .attr("stdDeviation", 2);
+
+  // 晕影渐变
+  const vignette = defs.append("radialGradient")
+    .attr("id", "graph-bg-vignette")
+    .attr("cx", "50%")
+    .attr("cy", "50%")
+    .attr("r", "70%");
+  vignette.append("stop").attr("offset", "0%").attr("stop-color", "rgba(0,0,0,0)");
+  vignette.append("stop").attr("offset", "100%").attr("stop-color", "rgba(0,0,0,0.45)");
+
+  // 背景
+  svg.append("rect")
+    .attr("class", "graph-bg")
+    .attr("width", width)
+    .attr("height", height)
+    .attr("fill", "url(#graph-bg-vignette)");
+
+  // 图层
+  const root = svg.append("g").attr("class", "graph-root");
+  const linkLayer = root.append("g").attr("class", "links");
+  const nodeLayer = root.append("g").attr("class", "nodes");
+
+  // 数据准备
+  const nodes = data.nodes.map(n => ({ ...n }));
+  const links = data.edges.map(e => ({ ...e }));
+
+  // 初始位置（中心圆环）
+  for (const n of nodes) {
+    const angle = Math.random() * Math.PI * 2;
+    const r = 40 + Math.random() * 30;
+    n.x = width / 2 + Math.cos(angle) * r;
+    n.y = height / 2 + Math.sin(angle) * r;
   }
 
-  // Clear previous graph if exists
-  d3.select('#collaboration-graph').selectAll('*').remove();
+  // 构建邻接表
+  const adjacency = new Map();
+  for (const n of nodes) adjacency.set(n.id, new Set());
+  for (const e of data.edges) {
+    const s = typeof e.source === "string" ? e.source : e.source.id;
+    const t = typeof e.target === "string" ? e.target : e.target.id;
+    adjacency.get(s)?.add(t);
+    adjacency.get(t)?.add(s);
+  }
 
-  const width = document.getElementById('collaboration-graph').clientWidth || 800;
-  const height = document.getElementById('collaboration-graph').clientHeight || 600;
+  // 节点半径计算
+  const radius = (n) => 6 + Math.sqrt(n.degree) * 2.6;
 
-  // Create SVG
-  const svg = d3.select('#collaboration-graph')
-    .append('svg')
-    .attr('width', width)
-    .attr('height', height)
-    .attr('viewBox', [0, 0, width, height])
-    .style('font', '300 14px system-ui');
-
-  // Create main group for zoom/pan
-  const g = svg.append('g');
-
-  // Define arrow marker for directed edges
-  svg.append('defs').append('marker')
-    .attr('id', 'arrow')
-    .attr('viewBox', '0 -5 10 10')
-    .attr('refX', 20)
-    .attr('refY', 0)
-    .attr('markerWidth', 6)
-    .attr('markerHeight', 6)
-    .attr('orient', 'auto')
-    .append('path')
-    .attr('d', 'M0,-5L10,0L0,5')
-    .attr('fill', '#999')
-    .attr('opacity', 0.6);
-
-  // Create zoom behavior
-  const zoom = d3.zoom()
-    .scaleExtent([0.1, 4])
-    .on('zoom', (event) => {
-      g.attr('transform', event.transform);
-    });
-
-  svg.call(zoom);
-
-  // Calculate node degrees for sizing
-  const nodeDegrees = new Map();
-  data.links.forEach(link => {
-    nodeDegrees.set(link.source, (nodeDegrees.get(link.source) || 0) + 1);
-    nodeDegrees.set(link.target, (nodeDegrees.get(link.target) || 0) + 1);
-  });
-
-  // Add degree to nodes
-  data.nodes.forEach(node => {
-    node.degree = nodeDegrees.get(node.id) || 0;
-  });
-
-  // Create force simulation
-  const simulation = d3.forceSimulation(data.nodes)
-    .force('link', d3.forceLink(data.links)
+  // 力模拟
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links)
       .id(d => d.id)
-      .distance(170))
-    .force('charge', d3.forceManyBody()
-      .strength(-650))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collide', d3.forceCollide()
-      .radius(d => 6 + Math.sqrt(d.degree) * 2.6 + 5)
-      .iterations(2));
+      .distance(170)
+      .strength(0.22))
+    .force("charge", d3.forceManyBody().strength(-650).distanceMax(900))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collision", d3.forceCollide()
+      .radius(d => radius(d) + 14)
+      .strength(0.9))
+    .force("x", d3.forceX(width / 2).strength(0.02))
+    .force("y", d3.forceY(height / 2).strength(0.02))
+    .alphaDecay(0.005)
+    .velocityDecay(0.28)
+    .alphaTarget(0.015);
 
-  // Create curved links (arcs)
-  const link = g.append('g')
-    .attr('stroke', '#999')
-    .attr('stroke-opacity', 0.6)
-    .selectAll('path')
-    .data(data.links)
-    .join('path')
-    .attr('stroke-width', d => Math.sqrt(d.value || 1))
-    .attr('fill', 'none')
-    .attr('marker-end', 'url(#arrow)');
+  // 环境噪声力
+  sim.force("noise", () => {
+    for (const n of nodes) {
+      if (n.fx != null) continue;
+      n.vx = (n.vx ?? 0) + (Math.random() - 0.5) * 0.09;
+      n.vy = (n.vy ?? 0) + (Math.random() - 0.5) * 0.09;
+    }
+  });
 
-  // Create nodes
-  const node = g.append('g')
-    .attr('stroke', '#fff')
-    .attr('stroke-width', 1.5)
-    .selectAll('circle')
-    .data(data.nodes)
-    .join('circle')
-    .attr('r', d => 6 + Math.sqrt(d.degree) * 2.6)
-    .attr('fill', d => {
-      // Color based on degree (collaboration count)
-      const hue = 200 + (d.degree % 60); // Blue to purple range
-      return `hsl(${hue}, 70%, 50%)`;
+  // 链接（弧形）
+  const linkSel = linkLayer.selectAll("path")
+    .data(links)
+    .enter()
+    .append("path")
+    .attr("class", "link")
+    .attr("fill", "none")
+    .attr("stroke-linecap", "round")
+    .attr("stroke-width", d => 1.1 + d.weight * 0.3);
+
+  // 节点
+  const nodeSel = nodeLayer.selectAll("g.node")
+    .data(nodes)
+    .enter()
+    .append("g")
+    .attr("class", d => `node group-author${d.degree >= 5 ? " big" : ""}`);
+
+  const nodeInner = nodeSel.append("g")
+    .attr("class", "node-inner")
+    .style("animation-delay", (_, i) => `${Math.min(900, i * 18)}ms`);
+
+  // 光晕
+  nodeInner.append("circle")
+    .attr("class", "node-halo")
+    .attr("r", d => radius(d) * 1.3)
+    .attr("filter", "url(#graph-node-glow)");
+
+  // 主圆圈
+  nodeInner.append("circle")
+    .attr("class", "node-main")
+    .attr("r", radius);
+
+  // 标签
+  nodeInner.append("text")
+    .attr("dy", d => -radius(d) - 8)
+    .attr("text-anchor", "middle")
+    .text(d => d.label);
+
+  // 缩放/平移
+  const zoomBehavior = d3.zoom()
+    .scaleExtent([0.2, 4])
+    .on("zoom", (event) => {
+      root.attr("transform", event.transform.toString());
+    });
+  svg.call(zoomBehavior);
+
+  // 悬停高亮
+  nodeSel
+    .on("mouseenter", function(_, d) {
+      const neighbors = adjacency.get(d.id) ?? new Set();
+      nodeSel.classed("dim", n => n.id !== d.id && !neighbors.has(n.id));
+      nodeSel.classed("highlight", n => n.id === d.id || neighbors.has(n.id));
+      linkSel.classed("dim", l => {
+        const s = l.source.id ?? l.source;
+        const t = l.target.id ?? l.target;
+        return s !== d.id && t !== d.id;
+      });
+      linkSel.classed("highlight", l => {
+        const s = l.source.id ?? l.source;
+        const t = l.target.id ?? l.target;
+        return s === d.id || t === d.id;
+      });
     })
-    .attr('cursor', 'pointer')
-    .call(drag(simulation));
-
-  // Add labels for nodes
-  const label = g.append('g')
-    .attr('class', 'labels')
-    .selectAll('text')
-    .data(data.nodes)
-    .join('text')
-    .text(d => d.name || d.id)
-    .attr('font-size', 12)
-    .attr('fill', '#333')
-    .attr('text-anchor', 'middle')
-    .attr('dy', d => -(6 + Math.sqrt(d.degree) * 2.6) - 5)
-    .style('pointer-events', 'none')
-    .style('text-shadow', '0 1px 0 #fff, 1px 0 0 #fff, 0 -1px 0 #fff, -1px 0 0 #fff');
-
-  // Add hover interactions
-  node.on('mouseover', function(event, d) {
-    // Highlight connected nodes and links
-    node.transition()
-      .duration(200)
-      .attr('opacity', n => {
-        const connectedLinks = data.links.filter(l =>
-          l.source.id === d.id || l.target.id === d.id
-        );
-        const connectedIds = new Set(connectedLinks.flatMap(l => [l.source.id, l.target.id]));
-        return connectedIds.has(n.id) ? 1 : 0.1;
-      });
-
-    link.transition()
-      .duration(200)
-      .attr('opacity', l => l.source.id === d.id || l.target.id === d.id ? 1 : 0.1);
-
-    label.transition()
-      .duration(200)
-      .attr('opacity', l => {
-        const connectedLinks = data.links.filter(link =>
-          link.source.id === d.id || link.target.id === d.id
-        );
-        const connectedIds = new Set(connectedLinks.flatMap(l => [l.source.id, l.target.id]));
-        return connectedIds.has(l.id) ? 1 : 0.1;
-      });
-
-    // Show tooltip
-    const tooltip = d3.select('body')
-      .append('div')
-      .attr('class', 'tooltip')
-      .style('position', 'absolute')
-      .style('padding', '10px')
-      .style('background', 'rgba(0, 0, 0, 0.8)')
-      .style('color', '#fff')
-      .style('border-radius', '5px')
-      .style('pointer-events', 'none')
-      .style('font-size', '12px')
-      .html(`<strong>${d.name || d.id}</strong><br/>Collaborations: ${d.degree}`);
-
-    tooltip
-      .style('left', (event.pageX + 10) + 'px')
-      .style('top', (event.pageY - 10) + 'px');
-  })
-  .on('mouseout', function() {
-    // Reset all highlights
-    node.transition()
-      .duration(200)
-      .attr('opacity', 1);
-
-    link.transition()
-      .duration(200)
-      .attr('opacity', 0.6);
-
-    label.transition()
-      .duration(200)
-      .attr('opacity', 1);
-
-    // Remove tooltip
-    d3.selectAll('.tooltip').remove();
-  })
-  .on('click', function(event, d) {
-    // Handle node click - could open author details
-    console.log('Clicked node:', d);
-    // You can trigger a modal or navigate to author page here
-  });
-
-  // Add title attribute for browser tooltip
-  node.append('title')
-    .text(d => `${d.name || d.id}\nCollaborations: ${d.degree}`);
-
-  // Tick function to update positions
-  simulation.on('tick', () => {
-    // Update link paths with curves
-    link.attr('d', d => {
-      const dx = d.target.x - d.source.x;
-      const dy = d.target.y - d.source.y;
-      const dr = Math.sqrt(dx * dx + dy * dy) * 0.5; // Curve radius
-
-      // Create curved path
-      const midX = (d.source.x + d.target.x) / 2;
-      const midY = (d.source.y + d.target.y) / 2;
-
-      return `M ${d.source.x} ${d.source.y}
-              Q ${midX} ${midY} ${d.target.x} ${d.target.y}`;
+    .on("mouseleave", () => {
+      nodeSel.classed("dim", false).classed("highlight", false);
+      linkSel.classed("dim", false).classed("highlight", false);
+    })
+    .on("click", (_, d) => {
+      opts.onNodeClick?.(d);
     });
 
-    // Update node positions
-    node
-      .attr('cx', d => d.x)
-      .attr('cy', d => d.y);
+  // 模拟tick
+  sim.on("tick", () => {
+    linkSel.attr("d", d => {
+      const s = d.source;
+      const t = d.target;
+      if (s.x == null || s.y == null || t.x == null || t.y == null) return "";
+      const dx = t.x - s.x;
+      const dy = t.y - s.y;
+      const dist = Math.hypot(dx, dy);
+      const dr = Math.max(dist * 1.8, 1);
+      return `M${s.x},${s.y}A${dr},${dr} 0 0,1 ${t.x},${t.y}`;
+    });
 
-    // Update label positions
-    label
-      .attr('x', d => d.x)
-      .attr('y', d => d.y);
+    nodeSel.attr("transform", d => `translate(${d.x},${d.y})`);
   });
 
-  // Add environmental noise for breathing effect
-  setInterval(() => {
-    data.nodes.forEach(node => {
-      if (node.x && node.y) {
-        node.x += (Math.random() - 0.5) * 0.3;
-        node.y += (Math.random() - 0.5) * 0.3;
-      }
-    });
-    simulation.alpha(0.1).restart();
-  }, 2000);
-
-  // Drag behavior
-  function drag(simulation) {
-    function dragstarted(event) {
-      if (!event.active) simulation.alphaTarget(0.3).restart();
-      event.subject.fx = event.subject.x;
-      event.subject.fy = event.subject.y;
-    }
-
-    function dragged(event) {
-      event.subject.fx = event.x;
-      event.subject.fy = event.y;
-    }
-
-    function dragended(event) {
-      if (!event.active) simulation.alphaTarget(0);
-      event.subject.fx = null;
-      event.subject.fy = null;
-    }
-
-    return d3.drag()
-      .on('start', dragstarted)
-      .on('drag', dragged)
-      .on('end', dragended);
-  }
+  // 返回清理函数
+  return () => {
+    sim.stop();
+    svg.selectAll("*").remove();
+  };
 }
