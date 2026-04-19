@@ -1030,11 +1030,20 @@ def cache_refresh_worker():
 # ===== 作者合作关系图谱API =====
 
 def get_merged_papers_sql(time_range="all"):
-    """生成合并OpenAlex和Semantic数据的SQL"""
+    """生成合并OpenAlex和Semantic数据的SQL - 只选择共同字段"""
     time_filter = ""
     if time_range != "all":
         years = int(time_range)
         time_filter = f"AND toYear(toDate(publication_date)) >= year(toDate(today())) - {years}"
+
+    # 只选择两个表都有的字段
+    common_fields = [
+        'doi', 'rank', 'author_id', 'author', 'uid', 'title', 'journal',
+        'citation_count', 'tag', 'state', 'institution_id', 'institution_name',
+        'institution_country', 'institution_type', 'publication_date'
+    ]
+
+    fields_str = ', '.join(common_fields)
 
     return f"""
     WITH combined AS (
@@ -1055,9 +1064,9 @@ def get_merged_papers_sql(time_range="all"):
             argMax(institution_type, source_order) as institution_type,
             argMax(publication_date, source_order) as publication_date
         FROM (
-            SELECT *, 1 as source_order FROM OpenAlex WHERE doi != '' {time_filter}
+            SELECT {fields_str}, 1 as source_order FROM OpenAlex WHERE doi != '' {time_filter}
             UNION ALL
-            SELECT *, 2 as source_order FROM semantic WHERE doi != '' {time_filter}
+            SELECT {fields_str}, 2 as source_order FROM semantic WHERE doi != '' {time_filter}
         )
         GROUP BY doi, rank
     )
