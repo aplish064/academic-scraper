@@ -1029,13 +1029,19 @@ def cache_refresh_worker():
 
 # ===== 作者合作关系图谱API =====
 
-def get_merged_papers_sql(time_range="all"):
+def get_merged_papers_sql(time_range="all", journal_keyword=None):
     """生成合并OpenAlex和Semantic数据的SQL - 只选择共同字段"""
     time_filter = ""
     if time_range != "all":
         years = int(time_range)
         # Use toDateOrNull to handle malformed dates, filter out NULL values
         time_filter = f"AND toYear(toDateOrNull(publication_date)) >= year(toDate(today())) - {years} AND toDateOrNull(publication_date) IS NOT NULL"
+
+    # Add journal filter for domain-based filtering
+    journal_filter = ""
+    if journal_keyword and journal_keyword.strip():
+        # Use LIKE for journal keyword matching (case-insensitive)
+        journal_filter = f"AND lower(journal) LIKE lower('%{journal_keyword.strip()}%')"
 
     # 只选择两个表都有的字段
     common_fields = [
@@ -1049,11 +1055,11 @@ def get_merged_papers_sql(time_range="all"):
     # Always filter out malformed dates
     base_date_filter = "AND length(publication_date) >= 4"
 
-    # Add LIMIT to reduce dataset size for time-filtered queries
+    # Add LIMIT to reduce dataset size for filtered queries
     limit_clause = ""
-    if time_range != "all":
-        # Limit to 1M records for time-filtered queries to avoid memory limits
-        limit_clause = "LIMIT 1000000"
+    if time_range != "all" or journal_keyword:
+        # Limit to 500K records for filtered queries to ensure performance
+        limit_clause = "LIMIT 500000"
 
     return f"""
     WITH combined AS (
@@ -1074,9 +1080,9 @@ def get_merged_papers_sql(time_range="all"):
             argMax(institution_type, source_order) as institution_type,
             argMax(publication_date, source_order) as publication_date
         FROM (
-            SELECT {fields_str}, 1 as source_order FROM OpenAlex PREWHERE doi != '' {base_date_filter} {time_filter}
+            SELECT {fields_str}, 1 as source_order FROM OpenAlex PREWHERE doi != '' {base_date_filter} {time_filter} {journal_filter}
             UNION ALL
-            SELECT {fields_str}, 2 as source_order FROM semantic PREWHERE doi != '' {base_date_filter} {time_filter}
+            SELECT {fields_str}, 2 as source_order FROM semantic PREWHERE doi != '' {base_date_filter} {time_filter} {journal_filter}
         )
         GROUP BY doi, rank
         {limit_clause}
@@ -1116,6 +1122,7 @@ def get_graph_authors():
             }), 400
 
         time_range = request.args.get('time_range', '1')  # Default to last 1 year
+        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
 
         # 参数验证
         allowed_time_ranges = ["all", "1", "2", "3"]
@@ -1134,7 +1141,7 @@ def get_graph_authors():
             }), 400
 
         # 检查缓存
-        cache_key = get_graph_cache_key('authors', min_collab=min_collaborations, max_nodes=max_nodes, time_range=time_range)
+        cache_key = get_graph_cache_key('authors', min_collab=min_collaborations, max_nodes=max_nodes, time_range=time_range, journal=journal_keyword)
         cached = get_from_cache(cache_key)
         if cached:
             return jsonify(cached)
@@ -1142,6 +1149,26 @@ def get_graph_authors():
         # 查询数据
         client = get_ch_client()
         if not client:
+            return jsonify({
+                "error": True,
+                "message": "数据库连接失败",
+                "code": "DB_CONNECTION_ERROR"
+            }), 503
+
+        # 查询作者合作数据
+        query_sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range, journal_keyword)}
+        ),
+        author_collaborations AS (
+            SELECT
+                p1.author_id as author_id,
+                p1.author as author_name,
+                p1.institution_name as institution,
+                p1.institution_country as country,
+                count(DISTINCT p2.author_id) as degree,
+                count(DISTINCT p1.doi) as paper_count,
+                sum(p1.citation_count) as citation_count
             return jsonify({
                 "error": True,
                 "message": "数据库连接失败",
@@ -1244,6 +1271,7 @@ def get_graph_edges():
             }), 400
 
         time_range = request.args.get('time_range', '1')  # Default to last 1 year
+        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
 
         # 参数验证
         allowed_time_ranges = ["all", "1", "2", "3"]
@@ -1271,7 +1299,7 @@ def get_graph_edges():
                 }), 400
 
         # 检查缓存
-        cache_key = get_graph_cache_key('edges', ids=",".join(sorted(author_ids)), min_weight=min_weight, time_range=time_range)
+        cache_key = get_graph_cache_key('edges', ids=",".join(sorted(author_ids)), min_weight=min_weight, time_range=time_range, journal=journal_keyword)
         cached = get_from_cache(cache_key)
         if cached:
             return jsonify(cached)
@@ -1290,7 +1318,7 @@ def get_graph_edges():
         # 查询合作关系
         sql = f"""
         WITH combined_papers AS (
-            {get_merged_papers_sql(time_range)}
+            {get_merged_papers_sql(time_range, journal_keyword)}
         ),
         collaborations AS (
             SELECT
@@ -1348,6 +1376,7 @@ def get_graph_stats():
     try:
         # 获取时间范围参数，默认为1年
         time_range = request.args.get('time_range', '1')  # Default to last 1 year
+        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
 
         # 参数验证
         allowed_time_ranges = ["all", "1", "2", "3"]
@@ -1358,7 +1387,7 @@ def get_graph_stats():
                 "code": "INVALID_PARAMETER"
             }), 400
 
-        cache_key = get_graph_cache_key('stats', time_range=time_range)
+        cache_key = get_graph_cache_key('stats', time_range=time_range, journal=journal_keyword)
         cached = get_from_cache(cache_key)
         if cached:
             return jsonify(cached)
@@ -1374,7 +1403,7 @@ def get_graph_stats():
         # 查询统计数据
         stats_sql = f"""
         WITH combined_papers AS (
-            {get_merged_papers_sql(time_range)}
+            {get_merged_papers_sql(time_range, journal_keyword)}
         ),
         paper_stats AS (
             SELECT count(DISTINCT doi) as total_papers FROM combined_papers
