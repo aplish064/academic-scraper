@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>作者合作关系图谱</title>
+  <link rel="stylesheet" href="css/graph.css">
+</head>
+<body>
+  <!-- 粒子背景 -->
+  <canvas id="particles"></canvas>
+
+  <!-- 加载状态 -->
+  <div id="loading" class="glass">
+    <div>正在加载图谱数据...</div>
+  </div>
+
+  <!-- 错误提示 -->
+  <div id="error-message" class="glass hidden">
+    <div class="error-title">加载失败</div>
+    <div class="error-message" id="error-text"></div>
+    <div class="error-suggestions">
+      <div>可能的解决方案:</div>
+      <ul>
+        <li>检查 API 服务器是否运行 (python api_server.py)</li>
+        <li>确认数据库中有数据</li>
+        <li>查看浏览器控制台获取详细错误</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 控制面板 -->
+  <div class="control-panel glass">
+    <h3 style="margin-bottom: 16px; color: var(--ctp-lavender);">图谱筛选</h3>
+
+    <div class="filter-group">
+      <label for="min-degree">最小合作次数: <span id="degree-value">1</span></label>
+      <input type="range" id="min-degree" min="1" max="10" value="1">
+    </div>
+
+    <div class="filter-group">
+      <label for="node-limit">节点数量限制</label>
+      <select id="node-limit">
+        <option value="50">50 个节点</option>
+        <option value="100" selected>100 个节点</option>
+        <option value="200">200 个节点</option>
+        <option value="500">500 个节点</option>
+      </select>
+    </div>
+
+    <button id="apply-filters">应用筛选</button>
+  </div>
+
+  <!-- 图谱容器 -->
+  <svg id="graph"></svg>
+
+  <!-- 图例 -->
+  <div class="graph-legend glass">
+    <div class="legend-title">图例</div>
+    <div class="legend-item">
+      <div class="legend-dot author"></div>
+      <span>作者节点</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-line"></div>
+      <span>合作关系</span>
+    </div>
+    <div style="margin-top: 12px; font-size: 12px; color: rgba(205, 214, 244, 0.7);">
+      节点大小 = 合作次数
+    </div>
+  </div>
+
+  <!-- 节点详情面板 -->
+  <div id="node-details" class="glass hidden">
+    <div class="node-detail-title" id="detail-name"></div>
+    <div class="node-detail-row">
+      <span class="node-detail-label">作者ID:</span>
+      <span class="node-detail-value" id="detail-id"></span>
+    </div>
+    <div class="node-detail-row">
+      <span class="node-detail-label">合作次数:</span>
+      <span class="node-detail-value" id="detail-degree"></span>
+    </div>
+    <div class="node-detail-row">
+      <span class="node-detail-label">论文数:</span>
+      <span class="node-detail-value" id="detail-papers"></span>
+    </div>
+  </div>
+
+  <!-- D3.js CDN -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <!-- JavaScript 模块 -->
+  <script type="module">
+    import { initParticles } from './js/particles.js';
+    import { renderGraph } from './js/graph.js';
+
+    // API 配置
+    const API_BASE = 'http://localhost:8000';
+    const ENDPOINT = '/api/graph';
+
+    // DOM 元素
+    const loadingEl = document.getElementById('loading');
+    const errorEl = document.getElementById('error-message');
+    const errorTextEl = document.getElementById('error-text');
+    const graphEl = document.getElementById('graph');
+    const minDegreeInput = document.getElementById('min-degree');
+    const degreeValueEl = document.getElementById('degree-value');
+    const nodeLimitSelect = document.getElementById('node-limit');
+    const applyFiltersBtn = document.getElementById('apply-filters');
+    const nodeDetailsEl = document.getElementById('node-details');
+
+    // 状态
+    let currentCleanup = null;
+
+    // 更新滑块显示值
+    minDegreeInput.addEventListener('input', (e) => {
+      degreeValueEl.textContent = e.target.value;
+    });
+
+    // 显示错误
+    function showError(message) {
+      loadingEl.classList.add('hidden');
+      errorTextEl.textContent = message;
+      errorEl.classList.remove('hidden');
+    }
+
+    // 隐藏错误
+    function hideError() {
+      errorEl.classList.add('hidden');
+    }
+
+    // 获取图谱数据
+    async function fetchGraphData(minDegree, nodeLimit) {
+      try {
+        hideError();
+        loadingEl.classList.remove('hidden');
+
+        const url = `${API_BASE}${ENDPOINT}?min_degree=${minDegree}&limit=${nodeLimit}`;
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (!data.nodes || !data.edges) {
+          throw new Error('Invalid data format from API');
+        }
+
+        if (data.nodes.length === 0) {
+          throw new Error('No nodes found - try adjusting filters');
+        }
+
+        loadingEl.classList.add('hidden');
+        return data;
+
+      } catch (error) {
+        showError(error.message);
+        throw error;
+      }
+    }
+
+    // 渲染图谱
+    async function render() {
+      const minDegree = parseInt(minDegreeInput.value);
+      const nodeLimit = parseInt(nodeLimitSelect.value);
+
+      try {
+        const data = await fetchGraphData(minDegree, nodeLimit);
+
+        // 清理之前的图谱
+        if (currentCleanup) {
+          currentCleanup();
+          currentCleanup = null;
+        }
+
+        // 渲染新图谱
+        currentCleanup = renderGraph(graphEl, data, {
+          onNodeClick: (node) => {
+            nodeDetailsEl.classList.remove('hidden');
+            document.getElementById('detail-name').textContent = node.label || 'Unknown';
+            document.getElementById('detail-id').textContent = node.id || 'N/A';
+            document.getElementById('detail-degree').textContent = node.degree || 0;
+            document.getElementById('detail-papers').textContent = node.papers || 0;
+          }
+        });
+
+      } catch (error) {
+        console.error('Failed to render graph:', error);
+      }
+    }
+
+    // 应用筛选按钮
+    applyFiltersBtn.addEventListener('click', () => {
+      render();
+    });
+
+    // 初始化
+    async function init() {
+      try {
+        // 初始化粒子背景
+        initParticles();
+
+        // 加载初始图谱
+        await render();
+
+      } catch (error) {
+        console.error('Initialization failed:', error);
+      }
+    }
+
+    // 启动
+    init();
+  </script>
+</body>
+</html>
