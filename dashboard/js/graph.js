@@ -4,6 +4,14 @@
  */
 
 export function renderGraph(svgEl, data, opts = {}) {
+  // Input validation
+  if (!data || !data.nodes || !data.edges) {
+    throw new Error("Invalid graph data: expected { nodes: [], edges: [] }");
+  }
+  if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
+    throw new Error("Invalid graph data: nodes and edges must be arrays");
+  }
+
   const svg = d3.select(svgEl);
   svg.selectAll("*").remove();
 
@@ -102,7 +110,7 @@ export function renderGraph(svgEl, data, opts = {}) {
     .attr("class", "link")
     .attr("fill", "none")
     .attr("stroke-linecap", "round")
-    .attr("stroke-width", d => 1.1 + d.weight * 0.3);
+    .attr("stroke-width", d => 1.1 + (d.weight || 0) * 0.3);
 
   // 节点
   const nodeSel = nodeLayer.selectAll("g.node")
