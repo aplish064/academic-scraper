@@ -1074,13 +1074,38 @@ def get_graph_cache_key(prefix, **params):
 @app.route('/api/graph/authors', methods=['GET'])
 def get_graph_authors():
     """获取作者节点数据"""
+    print("📊 查询作者合作关系图谱...")
     try:
         # 获取查询参数
-        min_collaborations = int(request.args.get('min_collaborations', 1))
-        max_nodes = min(int(request.args.get('max_nodes', 200)), 500)  # 最大500
+        try:
+            min_collaborations = int(request.args.get('min_collaborations', 1))
+        except ValueError:
+            return jsonify({
+                "error": True,
+                "message": "min_collaborations must be an integer",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        try:
+            max_nodes = min(int(request.args.get('max_nodes', 200)), 500)  # 最大500
+        except ValueError:
+            return jsonify({
+                "error": True,
+                "message": "max_nodes must be an integer",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
         time_range = request.args.get('time_range', 'all')
 
         # 参数验证
+        allowed_time_ranges = ["all", "1", "2", "3"]
+        if time_range not in allowed_time_ranges:
+            return jsonify({
+                "error": True,
+                "message": f"time_range must be one of {allowed_time_ranges}",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
         if min_collaborations < 1 or min_collaborations > 50:
             return jsonify({
                 "error": True,
@@ -1184,11 +1209,30 @@ def get_graph_authors():
 @app.route('/api/graph/edges', methods=['GET'])
 def get_graph_edges():
     """获取合作关系数据"""
+    print("📊 查询作者合作关系边数据...")
     try:
         # 获取查询参数
         author_ids = request.args.getlist('author_ids')
-        min_weight = int(request.args.get('min_weight', 1))
+
+        try:
+            min_weight = int(request.args.get('min_weight', 1))
+        except ValueError:
+            return jsonify({
+                "error": True,
+                "message": "min_weight must be an integer",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
         time_range = request.args.get('time_range', 'all')
+
+        # 参数验证
+        allowed_time_ranges = ["all", "1", "2", "3"]
+        if time_range not in allowed_time_ranges:
+            return jsonify({
+                "error": True,
+                "message": f"time_range must be one of {allowed_time_ranges}",
+                "code": "INVALID_PARAMETER"
+            }), 400
 
         if not author_ids:
             return jsonify({
@@ -1196,6 +1240,15 @@ def get_graph_edges():
                 "message": "缺少author_ids参数",
                 "code": "MISSING_PARAMETER"
             }), 400
+
+        # SQL注入防护：验证author_ids不包含恶意字符
+        for aid in author_ids:
+            if "'" in aid or ";" in aid or "\\" in aid:
+                return jsonify({
+                    "error": True,
+                    "message": "Invalid author_id format",
+                    "code": "INVALID_PARAMETER"
+                }), 400
 
         # 检查缓存
         cache_key = get_graph_cache_key('edges', ids=",".join(sorted(author_ids)), min_weight=min_weight, time_range=time_range)
@@ -1211,7 +1264,7 @@ def get_graph_edges():
                 "code": "DB_CONNECTION_ERROR"
             }), 503
 
-        # 构建作者ID列表（用于SQL IN查询）
+        # 构建作者ID列表（用于SQL IN查询）- 已经过验证，安全
         author_ids_str = "', '".join(author_ids)
 
         # 查询合作关系
@@ -1271,6 +1324,7 @@ def get_graph_edges():
 @app.route('/api/graph/stats', methods=['GET'])
 def get_graph_stats():
     """获取图谱统计信息"""
+    print("📊 查询图谱统计信息...")
     try:
         cache_key = "graph:stats:all"
         cached = get_from_cache(cache_key)
