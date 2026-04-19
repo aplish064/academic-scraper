@@ -1027,6 +1027,333 @@ def cache_refresh_worker():
             import traceback
             traceback.print_exc()
 
+# ===== 作者合作关系图谱API =====
+
+def get_merged_papers_sql(time_range="all"):
+    """生成合并OpenAlex和Semantic数据的SQL"""
+    time_filter = ""
+    if time_range != "all":
+        years = int(time_range)
+        time_filter = f"AND toYear(toDate(publication_date)) >= year(toDate(today())) - {years}"
+
+    return f"""
+    WITH combined AS (
+        SELECT
+            doi,
+            rank,
+            argMax(author_id, source_order) as author_id,
+            argMax(author, source_order) as author,
+            argMax(uid, source_order) as uid,
+            argMax(title, source_order) as title,
+            argMax(journal, source_order) as journal,
+            argMax(citation_count, source_order) as citation_count,
+            argMax(tag, source_order) as tag,
+            argMax(state, source_order) as state,
+            argMax(institution_id, source_order) as institution_id,
+            argMax(institution_name, source_order) as institution_name,
+            argMax(institution_country, source_order) as institution_country,
+            argMax(institution_type, source_order) as institution_type,
+            argMax(publication_date, source_order) as publication_date
+        FROM (
+            SELECT *, 1 as source_order FROM OpenAlex WHERE doi != '' {time_filter}
+            UNION ALL
+            SELECT *, 2 as source_order FROM semantic WHERE doi != '' {time_filter}
+        )
+        GROUP BY doi, rank
+    )
+    SELECT * FROM combined
+    """
+
+def get_graph_cache_key(prefix, **params):
+    """生成图谱缓存键"""
+    import hashlib
+    params_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
+    return f"graph:{prefix}:{params_hash}"
+
+@app.route('/api/graph/authors', methods=['GET'])
+def get_graph_authors():
+    """获取作者节点数据"""
+    try:
+        # 获取查询参数
+        min_collaborations = int(request.args.get('min_collaborations', 1))
+        max_nodes = min(int(request.args.get('max_nodes', 200)), 500)  # 最大500
+        time_range = request.args.get('time_range', 'all')
+
+        # 参数验证
+        if min_collaborations < 1 or min_collaborations > 50:
+            return jsonify({
+                "error": True,
+                "message": "最小合作次数必须在1-50之间",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        # 检查缓存
+        cache_key = get_graph_cache_key('authors', min_collab=min_collaborations, max_nodes=max_nodes, time_range=time_range)
+        cached = get_from_cache(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        # 查询数据
+        client = get_ch_client()
+        if not client:
+            return jsonify({
+                "error": True,
+                "message": "数据库连接失败",
+                "code": "DB_CONNECTION_ERROR"
+            }), 503
+
+        # 获取合并后的论文数据，并计算合作关系
+        sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range)}
+        ),
+        author_collaborations AS (
+            SELECT
+                p1.author_id as author_id,
+                p1.author as author_name,
+                p1.institution_name as institution,
+                p1.institution_country as country,
+                count(DISTINCT p2.author_id) as degree,
+                count(DISTINCT p1.doi) as paper_count,
+                sum(p1.citation_count) as citation_count
+            FROM combined_papers p1
+            INNER JOIN combined_papers p2
+                ON p1.doi = p2.doi
+                AND p1.rank < p2.rank
+            GROUP BY author_id, author_name, institution, country
+            HAVING degree >= {min_collaborations}
+            ORDER BY degree DESC
+            LIMIT {max_nodes}
+        )
+        SELECT * FROM author_collaborations
+        """
+
+        result = client.query(sql)
+        if not result or not result.result_rows:
+            return jsonify({
+                "error": True,
+                "message": "未找到符合条件的数据",
+                "code": "NO_DATA",
+                "suggestions": ["降低最小合作次数", "扩大时间范围"]
+            }), 404
+
+        # 构建响应
+        nodes = []
+        for row in result.result_rows:
+            nodes.append({
+                "id": row[0],
+                "label": row[1],
+                "degree": row[4],
+                "paper_count": row[5],
+                "citation_count": row[6],
+                "institution": row[2] or "未知机构",
+                "country": row[3] or "未知"
+            })
+
+        # 获取总数
+        total_sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range)}
+        )
+        SELECT count(DISTINCT author_id) FROM combined_papers
+        """
+        total_result = client.query(total_sql)
+        total_authors = total_result.result_rows[0][0] if total_result.result_rows else 0
+
+        response = {
+            "nodes": nodes,
+            "total_authors": total_authors,
+            "filtered_authors": len(nodes)
+        }
+
+        # 缓存结果
+        set_to_cache(cache_key, response, ttl=600)
+
+        return jsonify(response)
+
+    except Exception as e:
+        print(f"❌ 获取作者数据失败: {e}")
+        return jsonify({
+            "error": True,
+            "message": f"查询失败: {str(e)}",
+            "code": "QUERY_ERROR"
+        }), 500
+
+
+@app.route('/api/graph/edges', methods=['GET'])
+def get_graph_edges():
+    """获取合作关系数据"""
+    try:
+        # 获取查询参数
+        author_ids = request.args.getlist('author_ids')
+        min_weight = int(request.args.get('min_weight', 1))
+        time_range = request.args.get('time_range', 'all')
+
+        if not author_ids:
+            return jsonify({
+                "error": True,
+                "message": "缺少author_ids参数",
+                "code": "MISSING_PARAMETER"
+            }), 400
+
+        # 检查缓存
+        cache_key = get_graph_cache_key('edges', ids=",".join(sorted(author_ids)), min_weight=min_weight, time_range=time_range)
+        cached = get_from_cache(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        client = get_ch_client()
+        if not client:
+            return jsonify({
+                "error": True,
+                "message": "数据库连接失败",
+                "code": "DB_CONNECTION_ERROR"
+            }), 503
+
+        # 构建作者ID列表（用于SQL IN查询）
+        author_ids_str = "', '".join(author_ids)
+
+        # 查询合作关系
+        sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range)}
+        ),
+        collaborations AS (
+            SELECT
+                p1.author_id as source_id,
+                p1.author as source_name,
+                p2.author_id as target_id,
+                p2.author as target_name,
+                count(*) as weight
+            FROM combined_papers p1
+            INNER JOIN combined_papers p2
+                ON p1.doi = p2.doi
+                AND p1.rank < p2.rank
+            WHERE p1.author_id IN ('{author_ids_str}')
+                AND p2.author_id IN ('{author_ids_str}')
+                AND p1.author_id != p2.author_id
+            GROUP BY source_id, source_name, target_id, target_name
+            HAVING weight >= {min_weight}
+        )
+        SELECT * FROM collaborations
+        """
+
+        result = client.query(sql)
+
+        edges = []
+        for row in result.result_rows:
+            edges.append({
+                "source": row[0],
+                "target": row[2],
+                "weight": row[4]
+            })
+
+        response = {
+            "edges": edges,
+            "total_collaborations": len(edges)
+        }
+
+        # 缓存结果
+        set_to_cache(cache_key, response, ttl=600)
+
+        return jsonify(response)
+
+    except Exception as e:
+        print(f"❌ 获取合作关系失败: {e}")
+        return jsonify({
+            "error": True,
+            "message": f"查询失败: {str(e)}",
+            "code": "QUERY_ERROR"
+        }), 500
+
+
+@app.route('/api/graph/stats', methods=['GET'])
+def get_graph_stats():
+    """获取图谱统计信息"""
+    try:
+        cache_key = "graph:stats:all"
+        cached = get_from_cache(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        client = get_ch_client()
+        if not client:
+            return jsonify({
+                "error": True,
+                "message": "数据库连接失败",
+                "code": "DB_CONNECTION_ERROR"
+            }), 503
+
+        # 查询统计数据
+        stats_sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql('all')}
+        ),
+        paper_stats AS (
+            SELECT count(DISTINCT doi) as total_papers FROM combined_papers
+        ),
+        author_stats AS (
+            SELECT count(DISTINCT author_id) as total_authors FROM combined_papers
+        ),
+        collab_stats AS (
+            SELECT
+                count(*) as total_collaborations,
+                avg(degree) as avg_degree,
+                max(degree) as max_degree
+            FROM (
+                SELECT
+                    p1.author_id,
+                    count(DISTINCT p2.author_id) as degree
+                FROM combined_papers p1
+                INNER JOIN combined_papers p2
+                    ON p1.doi = p2.doi
+                    AND p1.rank < p2.rank
+                GROUP BY p1.author_id
+            )
+        )
+        SELECT
+            ps.total_papers,
+            aus.total_authors,
+            cs.total_collaborations,
+            cs.avg_degree,
+            cs.max_degree
+        FROM paper_stats ps, author_stats aus, collab_stats cs
+        """
+
+        result = client.query(stats_sql)
+        if result and result.result_rows:
+            row = result.result_rows[0]
+            response = {
+                "total_papers": row[0],
+                "total_authors": row[1],
+                "total_collaborations": row[2],
+                "avg_collaboration_degree": round(row[3], 1) if row[3] else 0,
+                "max_collaboration_degree": row[4] or 0
+            }
+
+            # 缓存1小时
+            set_to_cache(cache_key, response, ttl=3600)
+
+            return jsonify(response)
+        else:
+            return jsonify({
+                "total_papers": 0,
+                "total_authors": 0,
+                "total_collaborations": 0,
+                "avg_collaboration_degree": 0,
+                "max_collaboration_degree": 0
+            })
+
+    except Exception as e:
+        print(f"❌ 获取统计数据失败: {e}")
+        return jsonify({
+            "error": True,
+            "message": f"查询失败: {str(e)}",
+            "code": "QUERY_ERROR"
+        }), 500
+
+
 if __name__ == '__main__':
     print("🚀 启动学术数据看板服务")
     print(f"📡 ClickHouse: {CLICKHOUSE_CONFIG['host']}:{CLICKHOUSE_CONFIG['port']}/{CLICKHOUSE_CONFIG['database']}")
