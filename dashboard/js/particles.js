@@ -10,8 +10,6 @@
  *   - Sine-phase "twinkle" modulates alpha so the field feels alive even
  *     while individual velocities are nearly still.
  *   - Positions wrap around the viewport.
- *
- * Converted from TypeScript to JavaScript
  */
 
 const PALETTE = [
@@ -37,7 +35,6 @@ export class ParticleField {
     this.h = 0;
     this.running = false;
     this.resizeHandler = () => this.resize();
-
     this.resize();
     this.spawn(count);
   }
