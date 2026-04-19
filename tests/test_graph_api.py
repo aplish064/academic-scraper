@@ -1,4 +1,13 @@
-"""作者合作关系图谱API单元测试"""
+"""作者合作关系图谱API单元测试
+
+这些测试验证作者合作关系图谱API端点的功能。
+测试需要ClickHouse数据库运行。
+
+运行测试:
+    python -m pytest tests/test_graph_api.py -v
+
+注意: 部分测试可能因数据库连接或SQL问题失败
+"""
 
 import unittest
 import sys
@@ -51,6 +60,8 @@ class TestGraphAPI(unittest.TestCase):
 
         data = json.loads(response.data)
         self.assertTrue(data.get('error'))
+        self.assertIn('message', data)
+        self.assertIn('code', data)
 
     def test_get_edges_basic(self):
         """测试基础合作关系查询"""
@@ -58,19 +69,21 @@ class TestGraphAPI(unittest.TestCase):
         authors_response = self.client.get('/api/graph/authors?max_nodes=10')
         authors_data = json.loads(authors_response.data)
 
-        if authors_data['nodes']:
-            author_ids = [node['id'] for node in authors_data['nodes'][:5]]
+        self.assertIn('nodes', authors_data, "Authors API should return 'nodes' key")
+        if not authors_data['nodes']:
+            self.skipTest("No author nodes available for testing edges")
+        author_ids = [node['id'] for node in authors_data['nodes'][:5]]
 
-            # 查询这些作者的合作关系
-            response = self.client.get('/api/graph/edges', query_string={
-                'author_ids': author_ids,
-                'min_weight': 1
-            })
-            self.assertEqual(response.status_code, 200)
+        # 查询这些作者的合作关系
+        response = self.client.get('/api/graph/edges', query_string={
+            'author_ids': author_ids,
+            'min_weight': 1
+        })
+        self.assertEqual(response.status_code, 200)
 
-            data = json.loads(response.data)
-            self.assertIn('edges', data)
-            self.assertIn('total_collaborations', data)
+        data = json.loads(response.data)
+        self.assertIn('edges', data)
+        self.assertIn('total_collaborations', data)
 
     def test_get_edges_missing_params(self):
         """测试缺少必需参数"""
@@ -79,6 +92,8 @@ class TestGraphAPI(unittest.TestCase):
 
         data = json.loads(response.data)
         self.assertTrue(data.get('error'))
+        self.assertIn('message', data)
+        self.assertIn('code', data)
 
     def test_get_stats(self):
         """测试统计数据查询"""
