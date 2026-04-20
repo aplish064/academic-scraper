@@ -13,13 +13,26 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.parent.absolute()
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from src.dblp_config import *
-from src.dblp_checkpoint import CheckpointManager
-from src.dblp_monitor import PerformanceMonitor, setup_loggers
-from src.dblp_clickhouse import create_clickhouse_client
+from src.dblp_config import (
+    DATA_DIR, LOG_DIR, XML_SNAPSHOT_PATH, PROGRESS_FILE,
+    CH_HOST, CH_PORT, CH_DATABASE, CH_TABLE, CH_USERNAME, CH_PASSWORD,
+    XML_PARSER_THREADS, AUTHOR_API_CONCURRENT, CH_BATCH_SIZE
+)
+
+try:
+    from src.dblp_checkpoint import CheckpointManager
+    from src.dblp_monitor import PerformanceMonitor, setup_loggers
+    from src.dblp_clickhouse import create_clickhouse_client
+except ImportError as e:
+    print(f"⚠️  依赖模块未找到: {e}")
+    print("请先实现后续任务:")
+    print("  - Task 2: 检查点管理器 (dblp_checkpoint)")
+    print("  - Task 3: ClickHouse写入器 (dblp_clickhouse)")
+    print("  - Task 4: 性能监控器 (dblp_monitor)")
+    sys.exit(1)
 
 
-def main():
+def main() -> None:
     """主函数"""
     print("="*80)
     print("DBLP Fetcher - 计算机科学论文数据获取系统")
@@ -48,8 +61,8 @@ def main():
         return
     print("✅ ClickHouse连接成功\n")
 
-    # TODO: 实现主流程
-    print("主流程待实现...")
+    # Task 1 只创建基础框架，主流程将在后续任务实现
+    print("✅ 基础框架已就绪，等待实现主流程...")
 
     # 测试：完成
     print("\n✅ 基础框架创建成功")
