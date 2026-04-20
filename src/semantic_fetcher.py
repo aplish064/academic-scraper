@@ -341,7 +341,7 @@ def fetch_papers_with_params(params, ch_client, max_results=1000, show_progress=
 
         if pbar:
             pbar.update(1)
-            pbar.set_postfix({f"{len(all_papers)}篇"})
+            pbar.set_postfix({"论文": f"{len(all_papers)}篇"})
 
         time.sleep(REQUEST_INTERVAL)
 
@@ -466,7 +466,7 @@ def execute_layer2(ch_client, progress):
                     month_rows += row_count
 
                     venue_pbar.update(1)
-                    venue_pbar.set_postfix({f"{paper_count}篇"})
+                    venue_pbar.set_postfix({"论文": f"{paper_count}篇"})
 
             total_papers += month_papers
             total_rows += month_rows
@@ -522,7 +522,7 @@ def execute_layer3(ch_client, progress):
                     year_rows += row_count
 
                     keyword_pbar.update(1)
-                    keyword_pbar.set_postfix({f"{paper_count}篇"})
+                    keyword_pbar.set_postfix({"论文": f"{paper_count}篇"})
 
             total_papers += year_papers
             total_rows += year_rows
@@ -531,7 +531,7 @@ def execute_layer3(ch_client, progress):
             save_progress(progress)
 
             year_pbar.update(1)
-            year_pbar.set_postfix({f"总计:{year_papers}篇"})
+            year_pbar.set_postfix({"论文": f"总计:{year_papers}篇"})
 
     print(f"✅ 第三层完成: {total_papers:,} 篇论文, {total_rows:,} 行")
     return total_papers, total_rows
