@@ -584,6 +584,44 @@
                 </div>
             </div>
 
+
+            <!-- DBLP特有图表 -->
+            <div class="chart-card" id="ccfDistCard" style="display: none;">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">CCF等级分布</div>
+                        <div class="chart-subtitle">计算机学会推荐期刊会议等级</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="ccfDistChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-card" id="venueTypeCard" style="display: none;">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">Venue类型分布</div>
+                        <div class="chart-subtitle">发表场所类型统计</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="venueTypeChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-card" id="yearTrendCard" style="display: none;">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">年份趋势</div>
+                        <div class="chart-subtitle">论文发表年份分布</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="yearTrendChart"></canvas>
+                </div>
+            </div>
+
             <!-- 每日论文累计 - 面积图 -->
         </div>
 
@@ -755,16 +793,39 @@
                 const instTypeCard = document.getElementById('instTypeCard');
                 const fwciDistCard = document.getElementById('fwciDistCard');
 
-                // 只在OpenAlex数据源时显示这些图表，semantic和全部数据都隐藏
+                // 只在OpenAlex数据源时显示这些图表，semantic和dblp都隐藏
                 if (data.source === 'openalex') {
                     if (countryCard) countryCard.style.display = 'block';
                     if (instTypeCard) instTypeCard.style.display = 'block';
                     if (fwciDistCard) fwciDistCard.style.display = 'block';
                 } else {
-                    // Semantic和全部数据源隐藏这些图表
+                    // Semantic和DBLP数据源隐藏这些图表
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
+                }
+
+                // DBLP特有图表显示逻辑
+                const ccfDistCard = document.getElementById('ccfDistCard');
+                const venueTypeCard = document.getElementById('venueTypeCard');
+                const yearTrendCard = document.getElementById('yearTrendCard');
+
+                if (data.source === 'dblp') {
+                    // 显示DBLP特有图表
+                    if (ccfDistCard && data.author_types && Object.keys(data.author_types).length > 0) {
+                        ccfDistCard.style.display = 'block';
+                    }
+                    if (venueTypeCard && data.venue_type_distribution && Object.keys(data.venue_type_distribution).length > 0) {
+                        venueTypeCard.style.display = 'block';
+                    }
+                    if (yearTrendCard && data.papers_by_date && Object.keys(data.papers_by_date).length > 0) {
+                        yearTrendCard.style.display = 'block';
+                    }
+                } else {
+                    // 非DBLP数据源隐藏这些图表
+                    if (ccfDistCard) ccfDistCard.style.display = 'none';
+                    if (venueTypeCard) venueTypeCard.style.display = 'none';
+                    if (yearTrendCard) yearTrendCard.style.display = 'none';
                 }
 
                 animateNumber(document.getElementById('highCitations'), stats.high_citations);
@@ -795,6 +856,24 @@
                     }
                     if (Object.keys(data.fwci_distribution).length > 0) {
                         chartsToCreate.push(createFwciDistChartFromAggregated(data.fwci_distribution));
+                    }
+                }
+
+                // DBLP特有图表
+                if (data.source === 'dblp') {
+                    // CCF等级分布（饼图）
+                    if (data.author_types && Object.keys(data.author_types).length > 0) {
+                        chartsToCreate.push(createCcfDistChartFromAggregated(data.author_types));
+                    }
+
+                    // Venue类型分布（饼图）
+                    if (data.venue_type_distribution && Object.keys(data.venue_type_distribution).length > 0) {
+                        chartsToCreate.push(createVenueTypeChartFromAggregated(data.venue_type_distribution));
+                    }
+
+                    // 年份趋势（折线图）
+                    if (data.papers_by_date && Object.keys(data.papers_by_date).length > 0) {
+                        chartsToCreate.push(createYearTrendChartFromAggregated(data.papers_by_date));
                     }
                 }
 
@@ -1727,6 +1806,104 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        // CCF等级分布图表（DBLP特有）
+        function createCcfDistChartFromAggregated(ccfDist) {
+            const labels = Object.keys(ccfDist);
+            const data = Object.values(ccfDist);
+
+            if (charts.ccfDist) charts.ccfDist.destroy();
+
+            const ctx = document.getElementById('ccfDistChart').getContext('2d');
+            charts.ccfDist = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right'
+                        }
+                    }
+                }
+            });
+        }
+
+        // Venue类型分布图表（DBLP特有）
+        function createVenueTypeChartFromAggregated(venueTypes) {
+            const labels = Object.keys(venueTypes);
+            const data = Object.values(venueTypes);
+
+            if (charts.venueType) charts.venueType.destroy();
+
+            const ctx = document.getElementById('venueTypeChart').getContext('2d');
+            charts.venueType = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: ['#8b5cf6', '#ec4899', '#14b8a6', '#f59e0b']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right'
+                        }
+                    }
+                }
+            });
+        }
+
+        // 年份趋势图表（DBLP特有，从聚合数据创建）
+        function createYearTrendChartFromAggregated(papersByDate) {
+            // 将年份对象转换为数组并排序
+            const sortedEntries = Object.entries(papersByDate)
+                .sort((a, b) => a[0].localeCompare(b[0]));
+
+            const labels = sortedEntries.map(e => e[0]);
+            const data = sortedEntries.map(e => e[1]);
+
+            if (charts.yearTrend) charts.yearTrend.destroy();
+
+            const ctx = document.getElementById('yearTrendChart').getContext('2d');
+            charts.yearTrend = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '论文数量',
+                        data: data,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
                 }
             });
         }
