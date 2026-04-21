@@ -22,12 +22,21 @@
 - **🔍 多维度筛选**: 按时间、作者类型、引用数筛选
 - **⚡ 高性能查询**: 基于ClickHouse的毫秒级响应
 - **📈 大数据支持**: 支持千万级数据查询
+- **🏷️ 数据源切换**: 支持OpenAlex、DBLP、Semantic Scholar多数据源切换
+- **💾 Redis缓存**: 提升数据查询性能
+
+## 支持的数据源
+
+- **OpenAlex**: 完整的论文、引用和机构信息
+- **DBLP**: 计算机科学论文，包含CCF评级和会议类型
+- **Semantic Scholar**: 论文和引用信息
 
 ## 技术栈
 
 - **前端**: HTML5 + CSS3 + Vanilla JavaScript
-- **后端**: Flask + ClickHouse
+- **后端**: Flask + ClickHouse + Redis
 - **数据库**: ClickHouse (列式存储，高性能分析)
+- **缓存**: Redis (数据缓存，提升查询性能)
 - **样式**: 自定义CSS（无框架依赖）
 
 ## 快速开始
@@ -174,6 +183,8 @@ export CLICKHOUSE_TABLE=papers
 | `GET /api/aggregated` | 获取聚合数据 |
 | `GET /api/health` | 健康检查 |
 | `GET /api/refresh` | 刷新缓存 |
+| `GET /api/data-sources` | 获取支持的数据源 |
+| `POST /api/switch-data-source` | 切换数据源 |
 
 ### 数据结构
 
