@@ -838,29 +838,33 @@ def get_all_sources_data():
             # 3. 引用数分布
             step_start = time.time()
             print(f"  [步骤 3/7] 引用数分布...")
-            citation_sql = f"""
-            SELECT
-                multiIf(
-                    citation_count = 0, '0',
-                    citation_count < 6, '1-5',
-                    citation_count < 11, '6-10',
-                    citation_count < 21, '11-20',
-                    citation_count < 51, '21-50',
-                    citation_count < 101, '51-100',
-                    citation_count < 501, '101-500',
-                    '500+'
-                ) as range,
-                uniqHLL12(doi) as count
-            FROM {table}
-            GROUP BY range
-            ORDER BY range
-            SETTINGS max_threads=1, max_execution_time=60
-            """
-            citation_result = query_clickhouse(citation_sql)
-            if citation_result:
-                for row in citation_result.result_rows:
-                    all_citations_dist[row[0]] = all_citations_dist.get(row[0], 0) + row[1]
-                    source_citations_dist[row[0]] = row[1]  # 同时保存独立数据
+            if source == 'dblp':
+                # DBLP没有citation_count字段，跳过
+                print(f"    ⊘ 跳过 (DBLP不支持)")
+            else:
+                citation_sql = f"""
+                SELECT
+                    multiIf(
+                        citation_count = 0, '0',
+                        citation_count < 6, '1-5',
+                        citation_count < 11, '6-10',
+                        citation_count < 21, '11-20',
+                        citation_count < 51, '21-50',
+                        citation_count < 101, '51-100',
+                        citation_count < 501, '101-500',
+                        '500+'
+                    ) as range,
+                    uniqHLL12(doi) as count
+                FROM {table}
+                GROUP BY range
+                ORDER BY range
+                SETTINGS max_threads=1, max_execution_time=60
+                """
+                citation_result = query_clickhouse(citation_sql)
+                if citation_result:
+                    for row in citation_result.result_rows:
+                        all_citations_dist[row[0]] = all_citations_dist.get(row[0], 0) + row[1]
+                        source_citations_dist[row[0]] = row[1]  # 同时保存独立数据
             step_time = time.time() - step_start
             print(f"    ✓ 完成 (耗时: {step_time:.2f}秒)")
 
