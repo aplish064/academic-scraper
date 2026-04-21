@@ -111,21 +111,19 @@ def query_clickhouse(sql, params=None):
 
 
 def query_total_unique_journals():
-    """查询三个表的总唯一期刊数（去重）"""
+    """查询两个表的总唯一期刊数（去重）"""
     try:
         client = get_ch_client()
         if not client:
             return 0
 
-        # 使用UNION ALL获取三个表的所有期刊，然后去重
+        # 使用UNION ALL获取两个表的所有期刊，然后去重
         journal_sql = """
         SELECT uniqExact(journal) as count
         FROM (
             SELECT journal FROM OpenAlex
             UNION ALL
             SELECT journal FROM semantic
-            UNION ALL
-            SELECT venue FROM dblp
         )
         WHERE journal != ''
         """
@@ -140,29 +138,24 @@ def query_total_unique_journals():
 
 
 def try_merge_from_cache():
-    """尝试从openalex、semantic和dblp缓存合并数据"""
+    """尝试从openalex和semantic缓存合并数据"""
     if not USE_CACHE or not redis_client:
         return None
 
-    # 获取openalex、semantic和dblp的缓存
+    # 获取openalex和semantic的缓存
     openalex_cache = get_from_cache(get_cache_key('openalex'))
     semantic_cache = get_from_cache(get_cache_key('semantic'))
 
-    # 获取dblp的缓存
-    dblp_cache = get_from_cache(get_cache_key('dblp'))
-
-    # 检查三个缓存是否都存在且完整
-    if not openalex_cache or not semantic_cache or not dblp_cache:
+    # 检查两个缓存是否都存在且完整
+    if not openalex_cache or not semantic_cache:
         return None
 
     # 验证数据完整性
     openalex_stats = openalex_cache.get('statistics', {})
     semantic_stats = semantic_cache.get('statistics', {})
-    dblp_stats = dblp_cache.get('statistics', {})
 
     if (openalex_stats.get('total_papers', 0) == 0 or
-        semantic_stats.get('total_papers', 0) == 0 or
-        dblp_stats.get('total_papers', 0) == 0):
+        semantic_stats.get('total_papers', 0) == 0):
         return None
 
     try:
@@ -175,14 +168,12 @@ def try_merge_from_cache():
             'top_countries': {},
             'institution_types': {},
             'fwci_distribution': {},
-            'venue_type_distribution': {},
             'statistics': {},
             'source': 'all',
             'table': 'all',
             '_source_data': {
                 'openalex': openalex_cache,
-                'semantic': semantic_cache,
-                'dblp': dblp_cache
+                'semantic': semantic_cache
             }
         }
 
@@ -200,17 +191,14 @@ def try_merge_from_cache():
         for range_key, count in semantic_cache.get('citations_distribution', {}).items():
             merged_data['citations_distribution'][range_key] = merged_data['citations_distribution'].get(range_key, 0) + count
 
-        # 合并作者类型/CCF等级
+        # 合并作者类型
         for tag, count in openalex_cache.get('author_types', {}).items():
             merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
 
         for tag, count in semantic_cache.get('author_types', {}).items():
             merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
 
-        for tag, count in dblp_cache.get('author_types', {}).items():
-            merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
-
-        # 合并Top期刊/venue（DBLP使用venue字段）
+        # 合并Top期刊（取并集，保留最高值）
         all_journals = {}
         for journal, count in openalex_cache.get('top_journals', {}).items():
             all_journals[journal] = all_journals.get(journal, 0) + count
@@ -218,15 +206,9 @@ def try_merge_from_cache():
         for journal, count in semantic_cache.get('top_journals', {}).items():
             all_journals[journal] = all_journals.get(journal, 0) + count
 
-        for journal, count in dblp_cache.get('top_journals', {}).items():
-            all_journals[journal] = all_journals.get(journal, 0) + count
-
         # 按数量排序，取前50
         sorted_journals = sorted(all_journals.items(), key=lambda x: x[1], reverse=True)[:50]
         merged_data['top_journals'] = dict(sorted_journals)
-
-        # 合并venue类型分布（只有dblp有）
-        merged_data['venue_type_distribution'] = dblp_cache.get('venue_type_distribution', {})
 
         # 合并Top国家（只有openalex有）
         merged_data['top_countries'] = openalex_cache.get('top_countries', {})
@@ -238,12 +220,12 @@ def try_merge_from_cache():
         merged_data['fwci_distribution'] = openalex_cache.get('fwci_distribution', {})
 
         # 合并统计数据
-        # 对于unique_journals，需要查询数据库获取准确的总数（因为三个数据源可能有重复期刊）
+        # 对于unique_journals，需要查询数据库获取准确的总数（因为两个数据源可能有重复期刊）
         total_journals = query_total_unique_journals()
 
         merged_data['statistics'] = {
-            'total_papers': openalex_stats.get('total_papers', 0) + semantic_stats.get('total_papers', 0) + dblp_stats.get('total_papers', 0),
-            'unique_authors': openalex_stats.get('unique_authors', 0) + semantic_stats.get('unique_authors', 0) + dblp_stats.get('unique_authors', 0),
+            'total_papers': openalex_stats.get('total_papers', 0) + semantic_stats.get('total_papers', 0),
+            'unique_authors': openalex_stats.get('unique_authors', 0) + semantic_stats.get('unique_authors', 0),
             'unique_journals': total_journals if total_journals > 0 else len(all_journals),
             'unique_institutions': openalex_stats.get('unique_institutions', 0),  # 只有openalex有
             'high_citations': openalex_stats.get('high_citations', 0) + semantic_stats.get('high_citations', 0),
@@ -306,7 +288,7 @@ def get_aggregated_data():
             return get_all_sources_data()
 
     # 智能缓存：检查"全部数据"缓存中是否有该数据源的独立数据
-    if source in ['openalex', 'semantic', 'dblp']:
+    if source in ['openalex', 'semantic']:
         all_cache_key = get_cache_key('all')
         all_cached_data = get_from_cache(all_cache_key)
         if all_cached_data and all_cached_data.get('_source_data', {}).get(source):
@@ -350,7 +332,6 @@ def get_aggregated_data():
         'top_journals': {},
         'top_countries': {},
         'institution_types': {},
-        'venue_type_distribution': {},
         'fwci_distribution': {},
         'statistics': {},
         'source': source,
@@ -373,19 +354,6 @@ def get_aggregated_data():
                 round(avgIf(fwci, fwci > 0), 2) as avg_fwci
             FROM {table_name}
             SETTINGS max_threads=4, max_execution_time=30
-            """
-        elif source == 'dblp':
-            # DBLP字段有限，使用简化统计
-            stats_sql = f"""
-            SELECT
-                uniqHLL12(doi) as total_papers,
-                uniqHLL12(author_pid) as unique_authors,
-                uniqHLL12(venue) as unique_journals,
-                0 as unique_institutions,
-                0 as high_citations,
-                0 as avg_fwci
-            FROM {table_name}
-            SETTINGS max_threads=1, max_execution_time=30
             """
         else:
             # Semantic字段较少，使用简化统计
@@ -430,19 +398,6 @@ def get_aggregated_data():
         SETTINGS max_threads=1
         """
 
-        # DBLP使用year字段而非publication_date
-        if source == 'dblp':
-            date_sql = f"""
-            SELECT
-                year as date,
-                uniqHLL12(doi) as count
-            FROM {table_name}
-            WHERE year != '' AND length(year) = 4
-            GROUP BY year
-            ORDER BY year DESC
-            SETTINGS max_threads=1
-            """
-
         date_result = query_clickhouse(date_sql)
         if date_result:
             for row in date_result.result_rows:
@@ -479,36 +434,19 @@ def get_aggregated_data():
         step_time = time.time() - step_start
         print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
 
-        # DBLP没有citation_count字段，跳过引用数分布
-        if source == 'dblp':
-            result['citations_distribution'] = {}
-            print(f"  ✓ 跳过引用数分布 (DBLP无此字段)")
-
-        # 4. 作者类型分布（基于tag字段或CCF等级）
+        # 4. 作者类型分布（基于tag字段）
         step_start = time.time()
-        print(f"[步骤 4/9] 作者类型/CCF等级分布查询...")
-        if source == 'dblp':
-            author_sql = f"""
-            SELECT
-                ccf_class,
-                count() as count
-            FROM {table_name}
-            WHERE ccf_class != '' AND ccf_class != 'nan'
-            GROUP BY ccf_class
-            ORDER BY count DESC
-            LIMIT 10
-            """
-        else:
-            author_sql = f"""
-            SELECT
-                tag,
-                count() as count
-            FROM {table_name}
-            WHERE tag != ''
-            GROUP BY tag
-            ORDER BY count DESC
-            LIMIT 10
-            """
+        print(f"[步骤 4/8] 作者类型分布查询...")
+        author_sql = f"""
+        SELECT
+            tag,
+            count() as count
+        FROM {table_name}
+        WHERE tag != ''
+        GROUP BY tag
+        ORDER BY count DESC
+        LIMIT 10
+        """
 
         author_result = query_clickhouse(author_sql)
         if author_result:
@@ -521,21 +459,15 @@ def get_aggregated_data():
         # 5. Top期刊 - 使用DOI去重
         step_start = time.time()
         print(f"[步骤 5/8] Top期刊查询...")
-        # DBLP使用venue字段，其他数据源使用journal字段
-        if source == 'dblp':
-            journal_field = 'venue'
-        else:
-            journal_field = 'journal'
-
         journal_sql = f"""
         SELECT
-            {journal_field},
+            journal,
             uniqHLL12(doi) as count
         FROM {table_name}
-        WHERE {journal_field} != ''
-            AND length({journal_field}) > 3
-            AND lower({journal_field}) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
-        GROUP BY {journal_field}
+        WHERE journal != ''
+            AND length(journal) > 3
+            AND lower(journal) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
+        GROUP BY journal
         ORDER BY count DESC
         LIMIT 50
         SETTINGS max_threads=8, max_execution_time=60
@@ -548,32 +480,9 @@ def get_aggregated_data():
         step_time = time.time() - step_start
         print(f"  ✓ 完成 (耗时: {step_time:.2f}秒, 期刊数: {len(result['top_journals'])})")
 
-        # 6.1 Venue类型分布（仅DBLP支持）
+        # 6. Top国家（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 6.1/9] Venue类型分布查询...")
-        if source == 'dblp':
-            venue_type_sql = f"""
-            SELECT
-                venue_type,
-                uniqHLL12(doi) as count
-            FROM {table_name}
-            WHERE venue_type != '' AND venue_type != 'nan'
-            GROUP BY venue_type
-            ORDER BY count DESC
-            """
-
-            venue_type_result = query_clickhouse(venue_type_sql)
-            if venue_type_result:
-                for row in venue_type_result.result_rows:
-                    result['venue_type_distribution'][row[0]] = int(row[1])
-            step_time = time.time() - step_start
-            print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
-        else:
-            print(f"  ⊘ 跳过 (仅DBLP支持)")
-
-        # 7. Top国家（仅OpenAlex支持）- 使用DOI去重
-        step_start = time.time()
-        print(f"[步骤 7/9] Top国家查询...")
+        print(f"[步骤 6/8] Top国家查询...")
         if source == 'openalex':
             country_sql = f"""
             SELECT
@@ -600,7 +509,7 @@ def get_aggregated_data():
 
         # 7. 机构类型分布（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 8/9] 机构类型分布查询...")
+        print(f"[步骤 7/8] 机构类型分布查询...")
         if source == 'openalex':
             inst_type_sql = f"""
             SELECT
@@ -625,7 +534,7 @@ def get_aggregated_data():
 
         # 8. FWCI分布（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 9/9] FWCI分布查询...")
+        print(f"[步骤 8/8] FWCI分布查询...")
         if source == 'openalex':
             fwci_sql = f"""
             SELECT
@@ -684,7 +593,6 @@ def get_all_sources_data():
         'top_countries': {},
         'institution_types': {},
         'fwci_distribution': {},
-        'venue_type_distribution': {},
         'statistics': {},
         'source': 'all',
         'table': 'all',
@@ -725,20 +633,7 @@ def get_all_sources_data():
             source_fwci_count = 0
 
             # 1. 统计总览 - 区分数据源，使用去重机制
-            if source == 'dblp':
-                stats_sql = f"""
-                SELECT
-                    uniqHLL12(doi) as total_papers,
-                    uniqHLL12(author_pid) as unique_authors,
-                    uniqHLL12(venue) as unique_journals,
-                    0 as unique_institutions,
-                    0 as high_citations,
-                    0 as fwci_sum,
-                    0 as fwci_count
-                FROM {table}
-                SETTINGS max_threads=1
-                """
-            elif source == 'openalex':
+            if source == 'openalex':
                 stats_sql = f"""
                 SELECT
                     uniqHLL12(doi) as total_papers,
@@ -813,19 +708,6 @@ def get_all_sources_data():
             SETTINGS max_threads=1
             """
 
-            # DBLP使用year字段而非publication_date
-            if source == 'dblp':
-                date_sql = f"""
-                SELECT
-                    year as date,
-                    uniqHLL12(doi) as count
-                FROM {table}
-                WHERE year != '' AND length(year) = 4
-                GROUP BY year
-                ORDER BY year DESC
-                SETTINGS max_threads=1
-                """
-
             date_result = query_clickhouse(date_sql)
             if date_result:
                 for row in date_result.result_rows:
@@ -838,87 +720,44 @@ def get_all_sources_data():
             # 3. 引用数分布
             step_start = time.time()
             print(f"  [步骤 3/7] 引用数分布...")
-            if source == 'dblp':
-                # DBLP没有citation_count字段，跳过
-                print(f"    ⊘ 跳过 (DBLP不支持)")
-            else:
-                citation_sql = f"""
-                SELECT
-                    multiIf(
-                        citation_count = 0, '0',
-                        citation_count < 6, '1-5',
-                        citation_count < 11, '6-10',
-                        citation_count < 21, '11-20',
-                        citation_count < 51, '21-50',
-                        citation_count < 101, '51-100',
-                        citation_count < 501, '101-500',
-                        '500+'
-                    ) as range,
-                    uniqHLL12(doi) as count
-                FROM {table}
-                GROUP BY range
-                ORDER BY range
-                SETTINGS max_threads=1, max_execution_time=60
-                """
-                citation_result = query_clickhouse(citation_sql)
-                if citation_result:
-                    for row in citation_result.result_rows:
-                        all_citations_dist[row[0]] = all_citations_dist.get(row[0], 0) + row[1]
-                        source_citations_dist[row[0]] = row[1]  # 同时保存独立数据
-            step_time = time.time() - step_start
-            print(f"    ✓ 完成 (耗时: {step_time:.2f}秒)")
-
-            # 3.5 作者类型/CCF等级分布
-            step_start = time.time()
-            print(f"  [步骤 3.5/7] 作者类型/CCF等级...")
-            source_author_types = {}
-            if source == 'dblp':
-                author_sql = f"""
-                SELECT
-                    ccf_class,
-                    count() as count
-                FROM {table}
-                WHERE ccf_class != '' AND ccf_class != 'nan'
-                GROUP BY ccf_class
-                ORDER BY count DESC
-                LIMIT 10
-                """
-            else:
-                author_sql = f"""
-                SELECT
-                    tag,
-                    count() as count
-                FROM {table}
-                WHERE tag != ''
-                GROUP BY tag
-                ORDER BY count DESC
-                LIMIT 10
-                """
-            author_result = query_clickhouse(author_sql)
-            if author_result:
-                for row in author_result.result_rows:
-                    source_author_types[row[0]] = row[1]
+            citation_sql = f"""
+            SELECT
+                multiIf(
+                    citation_count = 0, '0',
+                    citation_count < 6, '1-5',
+                    citation_count < 11, '6-10',
+                    citation_count < 21, '11-20',
+                    citation_count < 51, '21-50',
+                    citation_count < 101, '51-100',
+                    citation_count < 501, '101-500',
+                    '500+'
+                ) as range,
+                uniqHLL12(doi) as count
+            FROM {table}
+            GROUP BY range
+            ORDER BY range
+            SETTINGS max_threads=1, max_execution_time=60
+            """
+            citation_result = query_clickhouse(citation_sql)
+            if citation_result:
+                for row in citation_result.result_rows:
+                    all_citations_dist[row[0]] = all_citations_dist.get(row[0], 0) + row[1]
+                    source_citations_dist[row[0]] = row[1]  # 同时保存独立数据
             step_time = time.time() - step_start
             print(f"    ✓ 完成 (耗时: {step_time:.2f}秒)")
 
             # 4. Top期刊
             step_start = time.time()
             print(f"  [步骤 4/7] Top期刊...")
-            # DBLP使用venue字段，其他数据源使用journal字段
-            if source == 'dblp':
-                journal_field = 'venue'
-            else:
-                journal_field = 'journal'
-
             journal_sql = f"""
             SELECT
-                {journal_field},
+                journal,
                 uniqHLL12(doi) as count
             FROM {table}
-            WHERE {journal_field} != ''
-                AND length({journal_field}) > 3
-                AND lower({journal_field}) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
-            GROUP BY {journal_field}
+            WHERE journal != ''
+                AND length(journal) > 3
+                AND lower(journal) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
+            GROUP BY journal
             ORDER BY count DESC
             LIMIT 50
             SETTINGS max_threads=8, max_execution_time=60
@@ -938,27 +777,6 @@ def get_all_sources_data():
             else:
                 print(f"    ⚠️ 查询失败或无结果")
             step_time = time.time() - step_start
-
-            # 4.6 Venue类型分布（仅DBLP支持）
-            step_start = time.time()
-            print(f"  [步骤 4.6/7] Venue类型分布...")
-            source_venue_types = {}
-            if source == 'dblp':
-                venue_type_sql = f"""
-                SELECT
-                    venue_type,
-                    uniqHLL12(doi) as count
-                FROM {table}
-                WHERE venue_type != '' AND venue_type != 'nan'
-                GROUP BY venue_type
-                ORDER BY count DESC
-                """
-                venue_type_result = query_clickhouse(venue_type_sql)
-                if venue_type_result:
-                    for row in venue_type_result.result_rows:
-                        source_venue_types[row[0]] = row[1]
-            step_time = time.time() - step_start
-            print(f"    ✓ 完成 (耗时: {step_time:.2f}秒)")
 
             # 5. OpenAlex特有数据（仅OpenAlex查询）
             if source == 'openalex':
@@ -1035,12 +853,10 @@ def get_all_sources_data():
             result['_source_data'][source] = {
                 'papers_by_date': dict(source_papers_by_date),
                 'citations_distribution': dict(source_citations_dist),
-                'author_types': dict(source_author_types),
                 'top_journals': dict(source_journals),
                 'top_countries': dict(source_countries),
                 'institution_types': dict(source_institution_types),
                 'fwci_distribution': dict(source_fwci_dist),
-                'venue_type_distribution': dict(source_venue_types),
                 'statistics': source_stats,
                 'source': source
             }
@@ -1052,15 +868,13 @@ def get_all_sources_data():
         # 查询总的唯一期刊数
         total_journals = 0
         try:
-            # 使用UNION ALL获取三个表的所有期刊，然后去重
+            # 使用UNION ALL获取两个表的所有期刊，然后去重
             journal_sql = """
             SELECT uniqExact(journal) as count
             FROM (
                 SELECT journal FROM OpenAlex
                 UNION ALL
                 SELECT journal FROM semantic
-                UNION ALL
-                SELECT venue FROM dblp
             )
             WHERE journal != ''
             """
@@ -1083,20 +897,6 @@ def get_all_sources_data():
         result['citations_distribution'] = all_citations_dist
         result['top_journals'] = dict(sorted(all_journals.items(), key=lambda x: x[1], reverse=True)[:50])
         result['top_countries'] = all_countries
-
-        # 聚合author_types和venue_type_distribution
-        all_author_types = {}
-        all_venue_types = {}
-        for source, source_data in result['_source_data'].items():
-            # 聚合author_types
-            for tag, count in source_data.get('author_types', {}).items():
-                all_author_types[tag] = all_author_types.get(tag, 0) + count
-            # 聚合venue_type_distribution
-            for venue_type, count in source_data.get('venue_type_distribution', {}).items():
-                all_venue_types[venue_type] = all_venue_types.get(venue_type, 0) + count
-
-        result['author_types'] = all_author_types
-        result['venue_type_distribution'] = all_venue_types
 
         print("="*60)
         print("✅ 全部数据查询完成")
@@ -1167,7 +967,7 @@ def preload_all_caches():
         print("⚠️  缓存未启用，跳过预加载")
         return
 
-    sources = ['openalex', 'semantic', 'dblp', 'all']
+    sources = ['openalex', 'semantic', 'all']
 
     for source in sources:
         print(f"  📦 预加载 {source} 数据源...")
@@ -1227,6 +1027,427 @@ def cache_refresh_worker():
             import traceback
             traceback.print_exc()
 
+# ===== 作者合作关系图谱API =====
+
+def get_merged_papers_sql(time_range="all", journal_keyword=None):
+    """生成合并OpenAlex和Semantic数据的SQL - 只选择共同字段"""
+    time_filter = ""
+    if time_range != "all":
+        years = int(time_range)
+        # Use toDateOrNull to handle malformed dates, filter out NULL values
+        time_filter = f"AND toYear(toDateOrNull(publication_date)) >= year(toDate(today())) - {years} AND toDateOrNull(publication_date) IS NOT NULL"
+
+    # Add journal filter for domain-based filtering
+    journal_filter = ""
+    if journal_keyword and journal_keyword.strip():
+        # Use LIKE for journal keyword matching (case-insensitive)
+        journal_filter = f"AND lower(journal) LIKE lower('%{journal_keyword.strip()}%')"
+
+    # 只选择两个表都有的字段
+    common_fields = [
+        'doi', 'rank', 'author_id', 'author', 'uid', 'title', 'journal',
+        'citation_count', 'tag', 'state', 'institution_id', 'institution_name',
+        'institution_country', 'institution_type', 'publication_date'
+    ]
+
+    fields_str = ', '.join(common_fields)
+
+    # Always filter out malformed dates
+    base_date_filter = "AND length(publication_date) >= 4"
+
+    # Add LIMIT to reduce dataset size for filtered queries
+    limit_clause = ""
+    if time_range != "all" or journal_keyword:
+        # Limit to 500K records for filtered queries to ensure performance
+        limit_clause = "LIMIT 500000"
+
+    return f"""
+    WITH combined AS (
+        SELECT
+            doi,
+            rank,
+            argMax(author_id, source_order) as author_id,
+            argMax(author, source_order) as author,
+            argMax(uid, source_order) as uid,
+            argMax(title, source_order) as title,
+            argMax(journal, source_order) as journal,
+            argMax(citation_count, source_order) as citation_count,
+            argMax(tag, source_order) as tag,
+            argMax(state, source_order) as state,
+            argMax(institution_id, source_order) as institution_id,
+            argMax(institution_name, source_order) as institution_name,
+            argMax(institution_country, source_order) as institution_country,
+            argMax(institution_type, source_order) as institution_type,
+            argMax(publication_date, source_order) as publication_date
+        FROM (
+            SELECT {fields_str}, 1 as source_order FROM OpenAlex PREWHERE doi != '' {base_date_filter} {time_filter} {journal_filter}
+            UNION ALL
+            SELECT {fields_str}, 2 as source_order FROM semantic PREWHERE doi != '' {base_date_filter} {time_filter} {journal_filter}
+        )
+        GROUP BY doi, rank
+        {limit_clause}
+    )
+    SELECT * FROM combined
+    """
+
+def get_graph_cache_key(prefix, **params):
+    """生成图谱缓存键"""
+    import hashlib
+    params_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
+    return f"graph:{prefix}:{params_hash}"
+
+@app.route('/api/graph/authors', methods=['GET'])
+def get_graph_authors():
+    """获取作者节点数据"""
+    print("📊 查询作者合作关系图谱...")
+    try:
+        # 获取查询参数
+        try:
+            min_collaborations = int(request.args.get('min_collaborations', 1))
+        except ValueError:
+            return jsonify({
+                "error": True,
+                "message": "min_collaborations must be an integer",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        try:
+            max_nodes = min(int(request.args.get('max_nodes', 200)), 500)  # 最大500
+        except ValueError:
+            return jsonify({
+                "error": True,
+                "message": "max_nodes must be an integer",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        time_range = request.args.get('time_range', '1')  # Default to last 1 year
+        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
+
+        # 参数验证
+        allowed_time_ranges = ["all", "1", "2", "3"]
+        if time_range not in allowed_time_ranges:
+            return jsonify({
+                "error": True,
+                "message": f"time_range must be one of {allowed_time_ranges}",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        if min_collaborations < 1 or min_collaborations > 50:
+            return jsonify({
+                "error": True,
+                "message": "最小合作次数必须在1-50之间",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        # 检查缓存
+        cache_key = get_graph_cache_key('authors', min_collab=min_collaborations, max_nodes=max_nodes, time_range=time_range, journal=journal_keyword)
+        cached = get_from_cache(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        # 查询数据
+        client = get_ch_client()
+        if not client:
+            return jsonify({
+                "error": True,
+                "message": "数据库连接失败",
+                "code": "DB_CONNECTION_ERROR"
+            }), 503
+
+        # 获取合并后的论文数据，并计算合作关系
+        sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range, journal_keyword)}
+        ),
+        author_collaborations AS (
+            SELECT
+                p1.author_id as author_id,
+                p1.author as author_name,
+                p1.institution_name as institution,
+                p1.institution_country as country,
+                count(DISTINCT p2.author_id) as degree,
+                count(DISTINCT p1.doi) as paper_count,
+                sum(p1.citation_count) as citation_count
+            FROM combined_papers p1
+            INNER JOIN combined_papers p2
+                ON p1.doi = p2.doi
+                AND p1.rank < p2.rank
+            GROUP BY author_id, author_name, institution, country
+            HAVING degree >= {min_collaborations}
+            ORDER BY degree DESC
+            LIMIT {max_nodes}
+        )
+        SELECT * FROM author_collaborations
+        """
+
+        result = client.query(sql)
+        if not result or not result.result_rows:
+            return jsonify({
+                "error": True,
+                "message": "未找到符合条件的数据",
+                "code": "NO_DATA",
+                "suggestions": ["降低最小合作次数", "扩大时间范围"]
+            }), 404
+
+        # 构建响应
+        nodes = []
+        for row in result.result_rows:
+            nodes.append({
+                "id": row[0],
+                "label": row[1],
+                "degree": row[4],
+                "paper_count": row[5],
+                "citation_count": row[6],
+                "institution": row[2] or "未知机构",
+                "country": row[3] or "未知"
+            })
+
+        # 获取总数
+        total_sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range)}
+        )
+        SELECT count(DISTINCT author_id) FROM combined_papers
+        """
+        total_result = client.query(total_sql)
+        total_authors = total_result.result_rows[0][0] if total_result.result_rows else 0
+
+        response = {
+            "nodes": nodes,
+            "total_authors": total_authors,
+            "filtered_authors": len(nodes)
+        }
+
+        # 缓存结果
+        set_to_cache(cache_key, response, ttl=600)
+
+        return jsonify(response)
+
+    except Exception as e:
+        print(f"❌ 获取作者数据失败: {e}")
+        return jsonify({
+            "error": True,
+            "message": f"查询失败: {str(e)}",
+            "code": "QUERY_ERROR"
+        }), 500
+
+
+@app.route('/api/graph/edges', methods=['GET'])
+def get_graph_edges():
+    """获取合作关系数据"""
+    print("📊 查询作者合作关系边数据...")
+    try:
+        # 获取查询参数
+        author_ids = request.args.getlist('author_ids')
+
+        try:
+            min_weight = int(request.args.get('min_weight', 1))
+        except ValueError:
+            return jsonify({
+                "error": True,
+                "message": "min_weight must be an integer",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        time_range = request.args.get('time_range', '1')  # Default to last 1 year
+        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
+
+        # 参数验证
+        allowed_time_ranges = ["all", "1", "2", "3"]
+        if time_range not in allowed_time_ranges:
+            return jsonify({
+                "error": True,
+                "message": f"time_range must be one of {allowed_time_ranges}",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        if not author_ids:
+            return jsonify({
+                "error": True,
+                "message": "缺少author_ids参数",
+                "code": "MISSING_PARAMETER"
+            }), 400
+
+        # SQL注入防护：验证author_ids不包含恶意字符
+        for aid in author_ids:
+            if "'" in aid or ";" in aid or "\\" in aid:
+                return jsonify({
+                    "error": True,
+                    "message": "Invalid author_id format",
+                    "code": "INVALID_PARAMETER"
+                }), 400
+
+        # 检查缓存
+        cache_key = get_graph_cache_key('edges', ids=",".join(sorted(author_ids)), min_weight=min_weight, time_range=time_range, journal=journal_keyword)
+        cached = get_from_cache(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        client = get_ch_client()
+        if not client:
+            return jsonify({
+                "error": True,
+                "message": "数据库连接失败",
+                "code": "DB_CONNECTION_ERROR"
+            }), 503
+
+        # 构建作者ID列表（用于SQL IN查询）- 已经过验证，安全
+        author_ids_str = "', '".join(author_ids)
+
+        # 查询合作关系
+        sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range, journal_keyword)}
+        ),
+        collaborations AS (
+            SELECT
+                p1.author_id as source_id,
+                p1.author as source_name,
+                p2.author_id as target_id,
+                p2.author as target_name,
+                count(*) as weight
+            FROM combined_papers p1
+            INNER JOIN combined_papers p2
+                ON p1.doi = p2.doi
+                AND p1.rank < p2.rank
+            WHERE p1.author_id IN ('{author_ids_str}')
+                AND p2.author_id IN ('{author_ids_str}')
+                AND p1.author_id != p2.author_id
+            GROUP BY source_id, source_name, target_id, target_name
+            HAVING weight >= {min_weight}
+        )
+        SELECT * FROM collaborations
+        """
+
+        result = client.query(sql)
+
+        edges = []
+        for row in result.result_rows:
+            edges.append({
+                "source": row[0],
+                "target": row[2],
+                "weight": row[4]
+            })
+
+        response = {
+            "edges": edges,
+            "total_collaborations": len(edges)
+        }
+
+        # 缓存结果
+        set_to_cache(cache_key, response, ttl=600)
+
+        return jsonify(response)
+
+    except Exception as e:
+        print(f"❌ 获取合作关系失败: {e}")
+        return jsonify({
+            "error": True,
+            "message": f"查询失败: {str(e)}",
+            "code": "QUERY_ERROR"
+        }), 500
+
+
+@app.route('/api/graph/stats', methods=['GET'])
+def get_graph_stats():
+    """获取图谱统计信息"""
+    print("📊 查询图谱统计信息...")
+    try:
+        # 获取时间范围参数，默认为1年
+        time_range = request.args.get('time_range', '1')  # Default to last 1 year
+        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
+
+        # 参数验证
+        allowed_time_ranges = ["all", "1", "2", "3"]
+        if time_range not in allowed_time_ranges:
+            return jsonify({
+                "error": True,
+                "message": f"time_range must be one of {allowed_time_ranges}",
+                "code": "INVALID_PARAMETER"
+            }), 400
+
+        cache_key = get_graph_cache_key('stats', time_range=time_range, journal=journal_keyword)
+        cached = get_from_cache(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        client = get_ch_client()
+        if not client:
+            return jsonify({
+                "error": True,
+                "message": "数据库连接失败",
+                "code": "DB_CONNECTION_ERROR"
+            }), 503
+
+        # 查询统计数据
+        stats_sql = f"""
+        WITH combined_papers AS (
+            {get_merged_papers_sql(time_range, journal_keyword)}
+        ),
+        paper_stats AS (
+            SELECT count(DISTINCT doi) as total_papers FROM combined_papers
+        ),
+        author_stats AS (
+            SELECT count(DISTINCT author_id) as total_authors FROM combined_papers
+        ),
+        collab_stats AS (
+            SELECT
+                count(*) as total_collaborations,
+                avg(degree) as avg_degree,
+                max(degree) as max_degree
+            FROM (
+                SELECT
+                    p1.author_id,
+                    count(DISTINCT p2.author_id) as degree
+                FROM combined_papers p1
+                INNER JOIN combined_papers p2
+                    ON p1.doi = p2.doi
+                    AND p1.rank < p2.rank
+                GROUP BY p1.author_id
+            )
+        )
+        SELECT
+            ps.total_papers,
+            aus.total_authors,
+            cs.total_collaborations,
+            cs.avg_degree,
+            cs.max_degree
+        FROM paper_stats ps, author_stats aus, collab_stats cs
+        """
+
+        result = client.query(stats_sql)
+        if result and result.result_rows:
+            row = result.result_rows[0]
+            response = {
+                "total_papers": row[0],
+                "total_authors": row[1],
+                "total_collaborations": row[2],
+                "avg_collaboration_degree": round(row[3], 1) if row[3] else 0,
+                "max_collaboration_degree": row[4] or 0
+            }
+
+            # 缓存1小时
+            set_to_cache(cache_key, response, ttl=3600)
+
+            return jsonify(response)
+        else:
+            return jsonify({
+                "total_papers": 0,
+                "total_authors": 0,
+                "total_collaborations": 0,
+                "avg_collaboration_degree": 0,
+                "max_collaboration_degree": 0
+            })
+
+    except Exception as e:
+        print(f"❌ 获取统计数据失败: {e}")
+        return jsonify({
+            "error": True,
+            "message": f"查询失败: {str(e)}",
+            "code": "QUERY_ERROR"
+        }), 500
+
 
 if __name__ == '__main__':
     print("🚀 启动学术数据看板服务")
@@ -1256,7 +1477,7 @@ if __name__ == '__main__':
         print("\n" + "="*60)
         print("🔄 清除启动时的旧缓存...")
         print("="*60)
-        sources = ['openalex', 'semantic', 'dblp', 'all']
+        sources = ['openalex', 'semantic', 'all']
         for source in sources:
             cache_key = get_cache_key(source)
             try:
