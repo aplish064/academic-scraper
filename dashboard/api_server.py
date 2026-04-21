@@ -684,6 +684,7 @@ def get_all_sources_data():
         'top_countries': {},
         'institution_types': {},
         'fwci_distribution': {},
+        'venue_type_distribution': {},
         'statistics': {},
         'source': 'all',
         'table': 'all',
@@ -724,7 +725,20 @@ def get_all_sources_data():
             source_fwci_count = 0
 
             # 1. 统计总览 - 区分数据源，使用去重机制
-            if source == 'openalex':
+            if source == 'dblp':
+                stats_sql = f"""
+                SELECT
+                    uniqHLL12(doi) as total_papers,
+                    uniqHLL12(author_pid) as unique_authors,
+                    uniqHLL12(venue) as unique_journals,
+                    0 as unique_institutions,
+                    0 as high_citations,
+                    0 as fwci_sum,
+                    0 as fwci_count
+                FROM {table}
+                SETTINGS max_threads=1
+                """
+            elif source == 'openalex':
                 stats_sql = f"""
                 SELECT
                     uniqHLL12(doi) as total_papers,
@@ -799,6 +813,19 @@ def get_all_sources_data():
             SETTINGS max_threads=1
             """
 
+            # DBLP使用year字段而非publication_date
+            if source == 'dblp':
+                date_sql = f"""
+                SELECT
+                    year as date,
+                    uniqHLL12(doi) as count
+                FROM {table}
+                WHERE year != '' AND length(year) = 4
+                GROUP BY year
+                ORDER BY year DESC
+                SETTINGS max_threads=1
+                """
+
             date_result = query_clickhouse(date_sql)
             if date_result:
                 for row in date_result.result_rows:
@@ -837,18 +864,57 @@ def get_all_sources_data():
             step_time = time.time() - step_start
             print(f"    ✓ 完成 (耗时: {step_time:.2f}秒)")
 
+            # 3.5 作者类型/CCF等级分布
+            step_start = time.time()
+            print(f"  [步骤 3.5/7] 作者类型/CCF等级...")
+            source_author_types = {}
+            if source == 'dblp':
+                author_sql = f"""
+                SELECT
+                    ccf_class,
+                    count() as count
+                FROM {table}
+                WHERE ccf_class != '' AND ccf_class != 'nan'
+                GROUP BY ccf_class
+                ORDER BY count DESC
+                LIMIT 10
+                """
+            else:
+                author_sql = f"""
+                SELECT
+                    tag,
+                    count() as count
+                FROM {table}
+                WHERE tag != ''
+                GROUP BY tag
+                ORDER BY count DESC
+                LIMIT 10
+                """
+            author_result = query_clickhouse(author_sql)
+            if author_result:
+                for row in author_result.result_rows:
+                    source_author_types[row[0]] = row[1]
+            step_time = time.time() - step_start
+            print(f"    ✓ 完成 (耗时: {step_time:.2f}秒)")
+
             # 4. Top期刊
             step_start = time.time()
             print(f"  [步骤 4/7] Top期刊...")
+            # DBLP使用venue字段，其他数据源使用journal字段
+            if source == 'dblp':
+                journal_field = 'venue'
+            else:
+                journal_field = 'journal'
+
             journal_sql = f"""
             SELECT
-                journal,
+                {journal_field},
                 uniqHLL12(doi) as count
             FROM {table}
-            WHERE journal != ''
-                AND length(journal) > 3
-                AND lower(journal) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
-            GROUP BY journal
+            WHERE {journal_field} != ''
+                AND length({journal_field}) > 3
+                AND lower({journal_field}) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
+            GROUP BY {journal_field}
             ORDER BY count DESC
             LIMIT 50
             SETTINGS max_threads=8, max_execution_time=60
@@ -868,6 +934,27 @@ def get_all_sources_data():
             else:
                 print(f"    ⚠️ 查询失败或无结果")
             step_time = time.time() - step_start
+
+            # 4.6 Venue类型分布（仅DBLP支持）
+            step_start = time.time()
+            print(f"  [步骤 4.6/7] Venue类型分布...")
+            source_venue_types = {}
+            if source == 'dblp':
+                venue_type_sql = f"""
+                SELECT
+                    venue_type,
+                    uniqHLL12(doi) as count
+                FROM {table}
+                WHERE venue_type != '' AND venue_type != 'nan'
+                GROUP BY venue_type
+                ORDER BY count DESC
+                """
+                venue_type_result = query_clickhouse(venue_type_sql)
+                if venue_type_result:
+                    for row in venue_type_result.result_rows:
+                        source_venue_types[row[0]] = row[1]
+            step_time = time.time() - step_start
+            print(f"    ✓ 完成 (耗时: {step_time:.2f}秒)")
 
             # 5. OpenAlex特有数据（仅OpenAlex查询）
             if source == 'openalex':
@@ -944,10 +1031,12 @@ def get_all_sources_data():
             result['_source_data'][source] = {
                 'papers_by_date': dict(source_papers_by_date),
                 'citations_distribution': dict(source_citations_dist),
+                'author_types': dict(source_author_types),
                 'top_journals': dict(source_journals),
                 'top_countries': dict(source_countries),
                 'institution_types': dict(source_institution_types),
                 'fwci_distribution': dict(source_fwci_dist),
+                'venue_type_distribution': dict(source_venue_types),
                 'statistics': source_stats,
                 'source': source
             }
@@ -959,13 +1048,15 @@ def get_all_sources_data():
         # 查询总的唯一期刊数
         total_journals = 0
         try:
-            # 使用UNION ALL获取两个表的所有期刊，然后去重
+            # 使用UNION ALL获取三个表的所有期刊，然后去重
             journal_sql = """
             SELECT uniqExact(journal) as count
             FROM (
                 SELECT journal FROM OpenAlex
                 UNION ALL
                 SELECT journal FROM semantic
+                UNION ALL
+                SELECT venue FROM dblp
             )
             WHERE journal != ''
             """
@@ -988,6 +1079,20 @@ def get_all_sources_data():
         result['citations_distribution'] = all_citations_dist
         result['top_journals'] = dict(sorted(all_journals.items(), key=lambda x: x[1], reverse=True)[:50])
         result['top_countries'] = all_countries
+
+        # 聚合author_types和venue_type_distribution
+        all_author_types = {}
+        all_venue_types = {}
+        for source, source_data in result['_source_data'].items():
+            # 聚合author_types
+            for tag, count in source_data.get('author_types', {}).items():
+                all_author_types[tag] = all_author_types.get(tag, 0) + count
+            # 聚合venue_type_distribution
+            for venue_type, count in source_data.get('venue_type_distribution', {}).items():
+                all_venue_types[venue_type] = all_venue_types.get(venue_type, 0) + count
+
+        result['author_types'] = all_author_types
+        result['venue_type_distribution'] = all_venue_types
 
         print("="*60)
         print("✅ 全部数据查询完成")
