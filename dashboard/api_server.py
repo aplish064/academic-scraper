@@ -111,19 +111,21 @@ def query_clickhouse(sql, params=None):
 
 
 def query_total_unique_journals():
-    """查询两个表的总唯一期刊数（去重）"""
+    """查询三个表的总唯一期刊数（去重）"""
     try:
         client = get_ch_client()
         if not client:
             return 0
 
-        # 使用UNION ALL获取两个表的所有期刊，然后去重
+        # 使用UNION ALL获取三个表的所有期刊，然后去重
         journal_sql = """
         SELECT uniqExact(journal) as count
         FROM (
             SELECT journal FROM OpenAlex
             UNION ALL
             SELECT journal FROM semantic
+            UNION ALL
+            SELECT venue FROM dblp
         )
         WHERE journal != ''
         """
@@ -138,24 +140,29 @@ def query_total_unique_journals():
 
 
 def try_merge_from_cache():
-    """尝试从openalex和semantic缓存合并数据"""
+    """尝试从openalex、semantic和dblp缓存合并数据"""
     if not USE_CACHE or not redis_client:
         return None
 
-    # 获取openalex和semantic的缓存
+    # 获取openalex、semantic和dblp的缓存
     openalex_cache = get_from_cache(get_cache_key('openalex'))
     semantic_cache = get_from_cache(get_cache_key('semantic'))
 
-    # 检查两个缓存是否都存在且完整
-    if not openalex_cache or not semantic_cache:
+    # 获取dblp的缓存
+    dblp_cache = get_from_cache(get_cache_key('dblp'))
+
+    # 检查三个缓存是否都存在且完整
+    if not openalex_cache or not semantic_cache or not dblp_cache:
         return None
 
     # 验证数据完整性
     openalex_stats = openalex_cache.get('statistics', {})
     semantic_stats = semantic_cache.get('statistics', {})
+    dblp_stats = dblp_cache.get('statistics', {})
 
     if (openalex_stats.get('total_papers', 0) == 0 or
-        semantic_stats.get('total_papers', 0) == 0):
+        semantic_stats.get('total_papers', 0) == 0 or
+        dblp_stats.get('total_papers', 0) == 0):
         return None
 
     try:
@@ -168,12 +175,14 @@ def try_merge_from_cache():
             'top_countries': {},
             'institution_types': {},
             'fwci_distribution': {},
+            'venue_type_distribution': {},
             'statistics': {},
             'source': 'all',
             'table': 'all',
             '_source_data': {
                 'openalex': openalex_cache,
-                'semantic': semantic_cache
+                'semantic': semantic_cache,
+                'dblp': dblp_cache
             }
         }
 
@@ -191,14 +200,17 @@ def try_merge_from_cache():
         for range_key, count in semantic_cache.get('citations_distribution', {}).items():
             merged_data['citations_distribution'][range_key] = merged_data['citations_distribution'].get(range_key, 0) + count
 
-        # 合并作者类型
+        # 合并作者类型/CCF等级
         for tag, count in openalex_cache.get('author_types', {}).items():
             merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
 
         for tag, count in semantic_cache.get('author_types', {}).items():
             merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
 
-        # 合并Top期刊（取并集，保留最高值）
+        for tag, count in dblp_cache.get('author_types', {}).items():
+            merged_data['author_types'][tag] = merged_data['author_types'].get(tag, 0) + count
+
+        # 合并Top期刊/venue（DBLP使用venue字段）
         all_journals = {}
         for journal, count in openalex_cache.get('top_journals', {}).items():
             all_journals[journal] = all_journals.get(journal, 0) + count
@@ -206,9 +218,15 @@ def try_merge_from_cache():
         for journal, count in semantic_cache.get('top_journals', {}).items():
             all_journals[journal] = all_journals.get(journal, 0) + count
 
+        for journal, count in dblp_cache.get('top_journals', {}).items():
+            all_journals[journal] = all_journals.get(journal, 0) + count
+
         # 按数量排序，取前50
         sorted_journals = sorted(all_journals.items(), key=lambda x: x[1], reverse=True)[:50]
         merged_data['top_journals'] = dict(sorted_journals)
+
+        # 合并venue类型分布（只有dblp有）
+        merged_data['venue_type_distribution'] = dblp_cache.get('venue_type_distribution', {})
 
         # 合并Top国家（只有openalex有）
         merged_data['top_countries'] = openalex_cache.get('top_countries', {})
@@ -220,12 +238,12 @@ def try_merge_from_cache():
         merged_data['fwci_distribution'] = openalex_cache.get('fwci_distribution', {})
 
         # 合并统计数据
-        # 对于unique_journals，需要查询数据库获取准确的总数（因为两个数据源可能有重复期刊）
+        # 对于unique_journals，需要查询数据库获取准确的总数（因为三个数据源可能有重复期刊）
         total_journals = query_total_unique_journals()
 
         merged_data['statistics'] = {
-            'total_papers': openalex_stats.get('total_papers', 0) + semantic_stats.get('total_papers', 0),
-            'unique_authors': openalex_stats.get('unique_authors', 0) + semantic_stats.get('unique_authors', 0),
+            'total_papers': openalex_stats.get('total_papers', 0) + semantic_stats.get('total_papers', 0) + dblp_stats.get('total_papers', 0),
+            'unique_authors': openalex_stats.get('unique_authors', 0) + semantic_stats.get('unique_authors', 0) + dblp_stats.get('unique_authors', 0),
             'unique_journals': total_journals if total_journals > 0 else len(all_journals),
             'unique_institutions': openalex_stats.get('unique_institutions', 0),  # 只有openalex有
             'high_citations': openalex_stats.get('high_citations', 0) + semantic_stats.get('high_citations', 0),
@@ -288,7 +306,7 @@ def get_aggregated_data():
             return get_all_sources_data()
 
     # 智能缓存：检查"全部数据"缓存中是否有该数据源的独立数据
-    if source in ['openalex', 'semantic']:
+    if source in ['openalex', 'semantic', 'dblp']:
         all_cache_key = get_cache_key('all')
         all_cached_data = get_from_cache(all_cache_key)
         if all_cached_data and all_cached_data.get('_source_data', {}).get(source):
