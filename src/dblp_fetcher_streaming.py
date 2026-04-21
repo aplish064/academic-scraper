@@ -17,6 +17,7 @@ import time
 import pandas as pd
 from typing import Dict, Any, Optional
 from pathlib import Path
+from lxml import etree
 
 from streaming import (
     ThreadSafeAuthorCache,
@@ -347,8 +348,6 @@ class DBLPStreamingFetcher:
 
     def _extract_paper_data(self, element: etree.Element) -> Dict[str, Any]:
         """Extract paper data from XML element."""
-        from .xml_parser import XMLStreamingParser
-
         paper_id = element.get('key')
 
         # Extract authors
