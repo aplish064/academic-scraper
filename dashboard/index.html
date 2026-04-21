@@ -700,6 +700,10 @@
 
                 // 根据数据源调整统计卡片布局
                 const statsGrid = document.querySelector('.stats-grid');
+                // DBLP数据源特殊处理
+                if (data.source === 'dblp') {
+                    statsGrid.classList.remove('openalex-compact');
+                }
                 if (data.source === 'openalex') {
                     statsGrid.classList.add('openalex-compact');
                 } else {
@@ -709,10 +713,19 @@
                 animateNumber(document.getElementById('totalPapers'), stats.total_papers);
                 animateNumber(document.getElementById('totalAuthors'), stats.unique_authors);
                 animateNumber(document.getElementById('totalJournals'), stats.unique_journals);
+
+                // 根据数据源更新期刊卡片标签
+                if (stats.unique_journals > 0) {
+                    const journalCard = document.getElementById('totalJournals').closest('.stat-card');
+                    const journalLabel = journalCard.querySelector('.stat-label');
+                    if (journalLabel) {
+                        journalLabel.textContent = data.source === 'dblp' ? 'Unique Venues' : '期刊数量';
+                    }
+                }
                 console.log('基础统计更新完成');
 
                 // 根据数据源显示/隐藏统计卡片
-                const isInstitutionsAvailable = stats.unique_institutions > 0 && data.source === 'openalex';
+                const isInstitutionsAvailable = stats.unique_institutions > 0 && (data.source === 'openalex' || data.source === 'semantic');
                 const institutionsCard = document.getElementById('institutionsCard');
                 if (institutionsCard) {
                     if (isInstitutionsAvailable) {
@@ -723,7 +736,7 @@
                     }
                 }
 
-                const isFwciAvailable = stats.avg_fwci > 0 && data.source === 'openalex';
+                const isFwciAvailable = stats.avg_fwci > 0 && (data.source === 'openalex' || data.source === 'semantic');
                 const fwciCard = document.getElementById('fwciCard');
                 const fwciColumnHeader = document.getElementById('fwciColumnHeader');
                 if (fwciCard) {
@@ -759,7 +772,8 @@
                 // Update timestamps and data source info
                 const now = new Date();
                 const dataSourceText = data.source === 'openalex' ? 'OpenAlex' :
-                                     data.source === 'semantic' ? 'Semantic Scholar' : '全部数据';
+                                     data.source === 'semantic' ? 'Semantic Scholar' :
+                                     data.source === 'dblp' ? 'DBLP' : '全部数据';
                 document.getElementById('lastUpdate').textContent = `${dataSourceText} - ${now.toLocaleString('zh-CN')}`;
                 document.getElementById('footerTime').textContent = now.toLocaleString('zh-CN');
                 document.getElementById('totalRecords').textContent = formatNumber(stats.total_papers);
