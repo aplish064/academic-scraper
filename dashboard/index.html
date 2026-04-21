@@ -490,7 +490,7 @@
                 <div class="stat-label">机构数量</div>
                 <div class="stat-value" id="totalInstitutions">0</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card" id="highCitationsCard">
                 <div class="stat-label">高被引论文</div>
                 <div class="stat-value" id="highCitations">0</div>
             </div>
@@ -559,7 +559,7 @@
             </div>
 
             <!-- 引用分布 - 柱状图 -->
-            <div class="chart-card">
+            <div class="chart-card" id="citationDistCard">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">引用次数分布</div>
@@ -673,7 +673,8 @@
         function animateNumber(element, target, duration = 2000) {
             // 对于大数字（>100万）或非数字类型，直接显示结果避免性能问题
             if (typeof target !== 'number' || target > 1000000) {
-                element.textContent = formatNumber(Math.round(target));
+                const numTarget = typeof target === 'string' ? parseFloat(target) : target;
+                element.textContent = formatNumber(Math.round(numTarget));
                 return;
             }
 
@@ -774,6 +775,17 @@
                     }
                 }
 
+                // 高被引论文卡片（DBLP无此数据，隐藏）
+                const highCitationsCard = document.getElementById('highCitationsCard');
+                if (highCitationsCard) {
+                    if (data.source === 'dblp') {
+                        highCitationsCard.style.display = 'none';
+                    } else {
+                        highCitationsCard.style.display = 'block';
+                        animateNumber(document.getElementById('highCitations'), stats.high_citations);
+                    }
+                }
+
                 const isFwciAvailable = stats.avg_fwci > 0 && (data.source === 'openalex' || data.source === 'semantic');
                 const fwciCard = document.getElementById('fwciCard');
                 const fwciColumnHeader = document.getElementById('fwciColumnHeader');
@@ -805,30 +817,29 @@
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
                 }
 
-                // DBLP特有图表显示逻辑
+                // 根据数据源显示/隐藏图表卡片
+                const citationDistCard = document.getElementById('citationDistCard');
                 const ccfDistCard = document.getElementById('ccfDistCard');
                 const venueTypeCard = document.getElementById('venueTypeCard');
                 const yearTrendCard = document.getElementById('yearTrendCard');
 
                 if (data.source === 'dblp') {
-                    // 显示DBLP特有图表
+                    // DBLP: 隐藏引用数分布和年份趋势卡片，显示DBLP特有图表
+                    if (citationDistCard) citationDistCard.style.display = 'none';
+                    if (yearTrendCard) yearTrendCard.style.display = 'none';
                     if (ccfDistCard && data.author_types && Object.keys(data.author_types).length > 0) {
                         ccfDistCard.style.display = 'block';
                     }
                     if (venueTypeCard && data.venue_type_distribution && Object.keys(data.venue_type_distribution).length > 0) {
                         venueTypeCard.style.display = 'block';
                     }
-                    if (yearTrendCard && data.papers_by_date && Object.keys(data.papers_by_date).length > 0) {
-                        yearTrendCard.style.display = 'block';
-                    }
                 } else {
-                    // 非DBLP数据源隐藏这些图表
+                    // 非DBLP数据源: 显示引用数分布和年份趋势卡片，隐藏DBLP特有图表
+                    if (citationDistCard) citationDistCard.style.display = 'block';
+                    if (yearTrendCard) yearTrendCard.style.display = 'block';
                     if (ccfDistCard) ccfDistCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
-                    if (yearTrendCard) yearTrendCard.style.display = 'none';
                 }
-
-                animateNumber(document.getElementById('highCitations'), stats.high_citations);
 
                 // Update timestamps and data source info
                 const now = new Date();
@@ -841,10 +852,18 @@
 
                 // 创建图表（根据数据源选择性创建）
                 const chartsToCreate = [
-                    createPapersTrendChartFromAggregated(data.papers_by_date),
-                    createCitationDistChartFromAggregated(data.citations_distribution),
                     createJournalDistChartFromAggregated(data.top_journals)
                 ];
+
+                // 年份趋势图表（DBLP无此数据，跳过）
+                if (data.source !== 'dblp') {
+                    chartsToCreate.push(createPapersTrendChartFromAggregated(data.papers_by_date));
+                }
+
+                // 引用数分布图表（DBLP无此数据，跳过）
+                if (data.source !== 'dblp') {
+                    chartsToCreate.push(createCitationDistChartFromAggregated(data.citations_distribution));
+                }
 
                 // 只为OpenAlex创建的图表（全部数据和semantic都不显示这些图表）
                 if (data.source === 'openalex') {

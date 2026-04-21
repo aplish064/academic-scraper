@@ -1,0 +1,158 @@
+✅ Connected to ClickHouse database academic_db
+🚀 Starting DBLP Streaming Fetcher
+   XML: /home/hkustgz/Us/academic-scraper/data/dblp.xml
+   Checkpoint: /home/hkustgz/Us/academic-scraper/log/checkpoint_streaming.json
+   Queue size: 10,000
+   Max concurrent: 1
+
+📊 Starting queue monitor...
+
+🔄 Starting consumer thread...
+
+📖 Parsing XML file...
+   Consumed: 307,529 papers | Authors: 462,811 | Queue: 35
+   Consumed: 602,593 papers | Authors: 742,398 | Queue: 60
+   Consumed: 914,447 papers | Authors: 1,010,648 | Queue: 58
+   Consumed: 1,194,889 papers | Authors: 1,225,172 | Queue: 2
+   Consumed: 1,483,268 papers | Authors: 1,424,485 | Queue: 54
+   Consumed: 1,777,722 papers | Authors: 1,619,345 | Queue: 68
+   Consumed: 2,059,772 papers | Authors: 1,774,065 | Queue: 40
+   Consumed: 2,359,526 papers | Authors: 1,924,806 | Queue: 76
+   Consumed: 2,734,632 papers | Authors: 2,093,972 | Queue: 58
+   Consumed: 2,976,844 papers | Authors: 2,196,678 | Queue: 29
+   Consumed: 3,201,030 papers | Authors: 2,295,514 | Queue: 47
+   Consumed: 3,574,169 papers | Authors: 2,461,576 | Queue: 32
+   Consumed: 3,774,495 papers | Authors: 2,543,928 | Queue: 64
+   Consumed: 4,133,996 papers | Authors: 2,748,459 | Queue: 47
+   Consumed: 4,299,049 papers | Authors: 2,851,450 | Queue: 61
+   Consumed: 4,653,696 papers | Authors: 3,048,403 | Queue: 22
+   Consumed: 4,897,422 papers | Authors: 3,160,553 | Queue: 47
+   Consumed: 5,256,297 papers | Authors: 3,308,114 | Queue: 58
+   Consumed: 5,608,648 papers | Authors: 3,433,878 | Queue: 56
+   Consumed: 5,720,841 papers | Authors: 3,471,144 | Queue: 60
+   Consumed: 6,077,383 papers | Authors: 3,612,159 | Queue: 58
+   Consumed: 6,429,918 papers | Authors: 3,731,773 | Queue: 45
+   Consumed: 6,510,120 papers | Authors: 3,754,537 | Queue: 45
+   Consumed: 6,877,827 papers | Authors: 3,856,445 | Queue: 41
+   Consumed: 7,242,699 papers | Authors: 3,977,893 | Queue: 69
+   Consumed: 7,525,103 papers | Authors: 4,038,190 | Queue: 61
+   Consumed: 7,875,926 papers | Authors: 4,100,372 | Queue: 60
+   Consumed: 8,180,611 papers | Authors: 4,149,604 | Queue: 0
+   Consumed: 8,273,992 papers | Authors: 4,164,950 | Queue: 51
+
+✅ XML parsing complete: 8,350,568 papers in 321.4s
+
+⏳ Waiting for consumer to finish...
+✅ Consumer thread finished
+
+🛑 Stopping queue monitor...
+
+📦 Cache statistics:
+   Total papers: 8,350,568
+   Total authors: 4,176,987
+   Pending processing: 4,176,987
+
+📝 Processing papers with XML data + CSrankings (fast mode)...
+Progress: 0.12% | Batch 10 | Papers: 1000, Rows: 3506
+Progress: 0.24% | Batch 20 | Papers: 1000, Rows: 3431
+Progress: 0.36% | Batch 30 | Papers: 1000, Rows: 3541
+Progress: 0.48% | Batch 40 | Papers: 1000, Rows: 3646
+Progress: 0.60% | Batch 50 | Papers: 1000, Rows: 3522
+Progress: 0.72% | Batch 60 | Papers: 1000, Rows: 3501
+Progress: 0.84% | Batch 70 | Papers: 1000, Rows: 3425
+Progress: 0.96% | Batch 80 | Papers: 1000, Rows: 3475
+Progress: 1.08% | Batch 90 | Papers: 1000, Rows: 3522
+Progress: 1.20% | Batch 100 | Papers: 1000, Rows: 3415
+Progress: 1.32% | Batch 110 | Papers: 1000, Rows: 3532
+Progress: 1.44% | Batch 120 | Papers: 1000, Rows: 3449
+Progress: 1.56% | Batch 130 | Papers: 1000, Rows: 3381
+Progress: 1.68% | Batch 140 | Papers: 1000, Rows: 3388
+Progress: 1.80% | Batch 150 | Papers: 1000, Rows: 3507
+Progress: 1.92% | Batch 160 | Papers: 1000, Rows: 3479
+Progress: 2.04% | Batch 170 | Papers: 1000, Rows: 3370
+Progress: 2.16% | Batch 180 | Papers: 1000, Rows: 3413
+Progress: 2.28% | Batch 190 | Papers: 1000, Rows: 3443
+Progress: 2.40% | Batch 200 | Papers: 1000, Rows: 3474
+Progress: 2.51% | Batch 210 | Papers: 1000, Rows: 3410
+Progress: 2.63% | Batch 220 | Papers: 1000, Rows: 3464
+Progress: 2.75% | Batch 230 | Papers: 1000, Rows: 3561
+Progress: 2.87% | Batch 240 | Papers: 1000, Rows: 3352
+Progress: 2.99% | Batch 250 | Papers: 1000, Rows: 3397
+Progress: 3.11% | Batch 260 | Papers: 1000, Rows: 3528
+Progress: 3.23% | Batch 270 | Papers: 1000, Rows: 3392
+Progress: 3.35% | Batch 280 | Papers: 1000, Rows: 3423
+Progress: 3.47% | Batch 290 | Papers: 1000, Rows: 3619
+Progress: 3.59% | Batch 300 | Papers: 1000, Rows: 3498
+Progress: 3.71% | Batch 310 | Papers: 1000, Rows: 3442
+Progress: 3.83% | Batch 320 | Papers: 1000, Rows: 3519
+Progress: 3.95% | Batch 330 | Papers: 1000, Rows: 3419
+Progress: 4.07% | Batch 340 | Papers: 1000, Rows: 3529
+Progress: 4.19% | Batch 350 | Papers: 1000, Rows: 3459
+Progress: 4.31% | Batch 360 | Papers: 1000, Rows: 3598
+Progress: 4.43% | Batch 370 | Papers: 1000, Rows: 3428
+Progress: 4.55% | Batch 380 | Papers: 1000, Rows: 3469
+Progress: 4.67% | Batch 390 | Papers: 1000, Rows: 3388
+Progress: 4.79% | Batch 400 | Papers: 1000, Rows: 3555
+Progress: 4.91% | Batch 410 | Papers: 1000, Rows: 3485
+Progress: 5.03% | Batch 420 | Papers: 1000, Rows: 3370
+Progress: 5.15% | Batch 430 | Papers: 1000, Rows: 3387
+Progress: 5.27% | Batch 440 | Papers: 1000, Rows: 3385
+Progress: 5.39% | Batch 450 | Papers: 1000, Rows: 3498
+Progress: 5.51% | Batch 460 | Papers: 1000, Rows: 3537
+Progress: 5.63% | Batch 470 | Papers: 1000, Rows: 3458
+Progress: 5.75% | Batch 480 | Papers: 1000, Rows: 3420
+Progress: 5.87% | Batch 490 | Papers: 1000, Rows: 3527
+Progress: 5.99% | Batch 500 | Papers: 1000, Rows: 3395
+Progress: 6.11% | Batch 510 | Papers: 1000, Rows: 3411
+Progress: 6.23% | Batch 520 | Papers: 1000, Rows: 3487
+Progress: 6.35% | Batch 530 | Papers: 1000, Rows: 3394
+Progress: 6.47% | Batch 540 | Papers: 1000, Rows: 3469
+Progress: 6.59% | Batch 550 | Papers: 1000, Rows: 3428
+Progress: 6.71% | Batch 560 | Papers: 1000, Rows: 3487
+Progress: 6.83% | Batch 570 | Papers: 1000, Rows: 3394
+Progress: 6.95% | Batch 580 | Papers: 1000, Rows: 3415
+Progress: 7.07% | Batch 590 | Papers: 1000, Rows: 3594
+Progress: 7.19% | Batch 600 | Papers: 1000, Rows: 3545
+Progress: 7.31% | Batch 610 | Papers: 1000, Rows: 3472
+Progress: 7.43% | Batch 620 | Papers: 1000, Rows: 3445
+Progress: 7.54% | Batch 630 | Papers: 1000, Rows: 3535
+Progress: 7.66% | Batch 640 | Papers: 1000, Rows: 3495
+Progress: 7.78% | Batch 650 | Papers: 1000, Rows: 3351
+Progress: 7.90% | Batch 660 | Papers: 1000, Rows: 3722
+Progress: 8.02% | Batch 670 | Papers: 1000, Rows: 3463
+Progress: 8.14% | Batch 680 | Papers: 1000, Rows: 3505
+Progress: 8.26% | Batch 690 | Papers: 1000, Rows: 3360
+Progress: 8.38% | Batch 700 | Papers: 1000, Rows: 3306
+Progress: 8.50% | Batch 710 | Papers: 1000, Rows: 3405
+Progress: 8.62% | Batch 720 | Papers: 1000, Rows: 3581
+Progress: 8.74% | Batch 730 | Papers: 1000, Rows: 3542
+Progress: 8.86% | Batch 740 | Papers: 1000, Rows: 3516
+Progress: 8.98% | Batch 750 | Papers: 1000, Rows: 3495
+Progress: 9.10% | Batch 760 | Papers: 1000, Rows: 3328
+Progress: 9.22% | Batch 770 | Papers: 1000, Rows: 3291
+Progress: 9.34% | Batch 780 | Papers: 1000, Rows: 3386
+Progress: 9.46% | Batch 790 | Papers: 1000, Rows: 3447
+Progress: 9.58% | Batch 800 | Papers: 1000, Rows: 3599
+Progress: 9.70% | Batch 810 | Papers: 1000, Rows: 3454
+Progress: 9.82% | Batch 820 | Papers: 1000, Rows: 3420
+Progress: 9.94% | Batch 830 | Papers: 1000, Rows: 3379
+Progress: 10.06% | Batch 840 | Papers: 1000, Rows: 3483
+Progress: 10.18% | Batch 850 | Papers: 1000, Rows: 3420
+Progress: 10.30% | Batch 860 | Papers: 1000, Rows: 3443
+Progress: 10.42% | Batch 870 | Papers: 1000, Rows: 3386
+Progress: 10.54% | Batch 880 | Papers: 1000, Rows: 3581
+Progress: 10.66% | Batch 890 | Papers: 1000, Rows: 3484
+Progress: 10.78% | Batch 900 | Papers: 1000, Rows: 3482
+Progress: 10.90% | Batch 910 | Papers: 1000, Rows: 3481
+Progress: 11.02% | Batch 920 | Papers: 1000, Rows: 3375
+Progress: 11.14% | Batch 930 | Papers: 1000, Rows: 3354
+Progress: 11.26% | Batch 940 | Papers: 1000, Rows: 3516
+Progress: 11.38% | Batch 950 | Papers: 1000, Rows: 3489
+Progress: 11.50% | Batch 960 | Papers: 1000, Rows: 3572
+Progress: 11.62% | Batch 970 | Papers: 1000, Rows: 3488
+Progress: 11.74% | Batch 980 | Papers: 1000, Rows: 3400
+Progress: 11.86% | Batch 990 | Papers: 1000, Rows: 3446
+Progress: 11.98% | Batch 1000 | Papers: 1000, Rows: 3471
+Progress: 12.10% | Batch 1010 | Papers: 1000, Rows: 3424
+Progress: 12.22% | Batch 1020 | Papers: 1000, Rows: 3420
+Progress: 12.34% | Batch 1030 | Papers: 1000, Rows: 3377

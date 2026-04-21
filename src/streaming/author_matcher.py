@@ -126,10 +126,11 @@ class StreamingAuthorMatcher:
                     return default
 
             # Build the row - must match table column order exactly
-            # dblp_key, mdate, type, title, year, venue, venue_type, ccf_class,
+            # dblp_key, mdate, type, title, year, publication_date, venue, venue_type, ccf_class,
             # author_pid, author_name, author_orcid, author_rank, author_role,
             # author_total_papers, author_profile_url, volume, number, pages,
-            # publisher, doi, ee, dblp_url, institution, institution_confidence
+            # publisher, doi, ee, dblp_url, url, publtype, series, editor, school,
+            # institution, institution_confidence
 
             # Generate dblp_url from paper_id
             dblp_url = f"https://dblp.org/rec/{dblp_key}.html" if dblp_key else ''
@@ -140,9 +141,10 @@ class StreamingAuthorMatcher:
             row = (
                 safe_str(dblp_key),  # dblp_key
                 '',  # mdate
-                '',  # type
+                safe_str(paper_data.get('type')),  # type (from ee type attribute)
                 safe_str(paper_data.get('title')),  # title
                 safe_str(paper_data.get('year')),  # year
+                safe_str(paper_data.get('publication_date')),  # publication_date (year+month)
                 safe_str(paper_data.get('venue')),  # venue (from XML)
                 '',  # venue_type
                 '',  # ccf_class
@@ -160,6 +162,11 @@ class StreamingAuthorMatcher:
                 safe_str(paper_data.get('doi')),  # doi (from XML)
                 safe_str(paper_data.get('ee')),  # ee (from XML)
                 dblp_url,  # dblp_url
+                safe_str(paper_data.get('url')),  # url (from XML)
+                safe_str(paper_data.get('publtype')),  # publtype (from XML attribute)
+                safe_str(paper_data.get('series')),  # series (from XML)
+                safe_str(paper_data.get('editor')),  # editor (from XML)
+                safe_str(paper_data.get('school')),  # school (from XML)
                 safe_str(csrankings_info.get('affiliation')),  # institution
                 1.0 if csrankings_info.get('affiliation') else 0.0  # institution_confidence
             )
@@ -178,10 +185,11 @@ class StreamingAuthorMatcher:
 
         # ClickHouse insert with column names
         column_names = [
-            'dblp_key', 'mdate', 'type', 'title', 'year', 'venue', 'venue_type', 'ccf_class',
+            'dblp_key', 'mdate', 'type', 'title', 'year', 'publication_date', 'venue', 'venue_type', 'ccf_class',
             'author_pid', 'author_name', 'author_orcid', 'author_rank', 'author_role',
             'author_total_papers', 'author_profile_url', 'volume', 'number', 'pages',
-            'publisher', 'doi', 'ee', 'dblp_url', 'institution', 'institution_confidence'
+            'publisher', 'doi', 'ee', 'dblp_url', 'url', 'publtype', 'series', 'editor', 'school',
+            'institution', 'institution_confidence'
         ]
 
         self.db_client.insert('dblp', rows, column_names=column_names)

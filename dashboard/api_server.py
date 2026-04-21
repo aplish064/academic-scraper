@@ -353,7 +353,20 @@ def get_aggregated_data():
                 uniqHLL12(doi) FILTER (WHERE citation_count >= 50) as high_citations,
                 round(avgIf(fwci, fwci > 0), 2) as avg_fwci
             FROM {table_name}
-            SETTINGS max_threads=4, max_execution_time=30
+            SETTINGS max_threads=8, max_execution_time=120
+            """
+        elif source == 'dblp':
+            # DBLP字段不同，使用对应的字段名
+            stats_sql = f"""
+            SELECT
+                uniqHLL12(doi) as total_papers,
+                uniqHLL12(author_pid) as unique_authors,
+                uniqHLL12(venue) as unique_journals,
+                0 as unique_institutions,
+                0 as high_citations,
+                0 as avg_fwci
+            FROM {table_name}
+            SETTINGS max_threads=4, max_execution_time=60
             """
         else:
             # Semantic字段较少，使用简化统计
@@ -366,7 +379,7 @@ def get_aggregated_data():
                 uniqHLL12(doi) FILTER (WHERE citation_count >= 50) as high_citations,
                 0 as avg_fwci
             FROM {table_name}
-            SETTINGS max_threads=1, max_execution_time=30
+            SETTINGS max_threads=4, max_execution_time=60
             """
 
         stats_result = query_clickhouse(stats_sql)
@@ -395,7 +408,7 @@ def get_aggregated_data():
         WHERE publication_date != '' AND length(publication_date) > 0
         GROUP BY formatDateTime(toDateOrNull(publication_date), '%Y-%m')
         ORDER BY date DESC
-        SETTINGS max_threads=1
+        SETTINGS max_threads=4, max_execution_time=120
         """
 
         date_result = query_clickhouse(date_sql)
@@ -408,44 +421,63 @@ def get_aggregated_data():
         # 3. 引用数分布 - 使用DOI去重
         step_start = time.time()
         print(f"[步骤 3/8] 引用数分布查询...")
-        citation_sql = f"""
-        SELECT
-            multiIf(
-                citation_count = 0, '0',
-                citation_count < 6, '1-5',
-                citation_count < 11, '6-10',
-                citation_count < 21, '11-20',
-                citation_count < 51, '21-50',
-                citation_count < 101, '51-100',
-                citation_count < 501, '101-500',
-                '500+'
-            ) as range,
-            uniqHLL12(doi) as count
-        FROM {table_name}
-        GROUP BY range
-        ORDER BY range
-        SETTINGS max_threads=4, max_execution_time=60
-        """
+        if source == 'dblp':
+            # DBLP没有citation_count字段，跳过引用数分布
+            result['citations_distribution'] = {}
+            print(f"  ⊘ 跳过 (DBLP无此字段)")
+            step_time = time.time() - step_start
+        else:
+            # OpenAlex和Semantic有citation_count字段
+            citation_sql = f"""
+            SELECT
+                multiIf(
+                    citation_count = 0, '0',
+                    citation_count < 6, '1-5',
+                    citation_count < 11, '6-10',
+                    citation_count < 21, '11-20',
+                    citation_count < 51, '21-50',
+                    citation_count < 101, '51-100',
+                    citation_count < 501, '101-500',
+                    '500+'
+                ) as range,
+                uniqHLL12(doi) as count
+            FROM {table_name}
+            GROUP BY range
+            ORDER BY range
+            SETTINGS max_threads=4, max_execution_time=60
+            """
 
-        citation_result = query_clickhouse(citation_sql)
-        if citation_result:
-            for row in citation_result.result_rows:
-                result['citations_distribution'][row[0]] = int(row[1])
-        step_time = time.time() - step_start
-        print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
+            citation_result = query_clickhouse(citation_sql)
+            if citation_result:
+                for row in citation_result.result_rows:
+                    result['citations_distribution'][row[0]] = int(row[1])
+            step_time = time.time() - step_start
+            print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
 
-        # 4. 作者类型分布（基于tag字段）
+        # 4. 作者类型分布（基于tag字段或CCF等级）
         step_start = time.time()
         print(f"[步骤 4/8] 作者类型分布查询...")
+
+        # 根据数据源使用不同的字段名
+        if source == 'dblp':
+            # DBLP使用ccf_class字段
+            author_type_field = 'ccf_class'
+            where_clause = "WHERE ccf_class != '' AND ccf_class != 'nan'"
+        else:
+            # OpenAlex和Semantic使用tag字段
+            author_type_field = 'tag'
+            where_clause = "WHERE tag != ''"
+
         author_sql = f"""
         SELECT
-            tag,
+            {author_type_field},
             count() as count
         FROM {table_name}
-        WHERE tag != ''
-        GROUP BY tag
+        {where_clause}
+        GROUP BY {author_type_field}
         ORDER BY count DESC
         LIMIT 10
+        SETTINGS max_threads=4, max_execution_time=60
         """
 
         author_result = query_clickhouse(author_sql)
@@ -456,18 +488,27 @@ def get_aggregated_data():
         print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
 
 
-        # 5. Top期刊 - 使用DOI去重
+        # 5. Top期刊/会议 - 使用DOI去重
         step_start = time.time()
         print(f"[步骤 5/8] Top期刊查询...")
+
+        # 根据数据源使用不同的字段名
+        if source == 'dblp':
+            # DBLP使用venue字段
+            journal_field = 'venue'
+        else:
+            # OpenAlex和Semantic使用journal字段
+            journal_field = 'journal'
+
         journal_sql = f"""
         SELECT
-            journal,
+            {journal_field},
             uniqHLL12(doi) as count
         FROM {table_name}
-        WHERE journal != ''
-            AND length(journal) > 3
-            AND lower(journal) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
-        GROUP BY journal
+        WHERE {journal_field} != ''
+            AND length({journal_field}) > 3
+            AND lower({journal_field}) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
+        GROUP BY {journal_field}
         ORDER BY count DESC
         LIMIT 50
         SETTINGS max_threads=8, max_execution_time=60
@@ -644,7 +685,7 @@ def get_all_sources_data():
                     sum(fwci) as fwci_sum,
                     countIf(fwci > 0) as fwci_count
                 FROM {table}
-                SETTINGS max_threads=4
+                SETTINGS max_threads=8, max_execution_time=120
                 """
             else:
                 stats_sql = f"""
@@ -967,7 +1008,7 @@ def preload_all_caches():
         print("⚠️  缓存未启用，跳过预加载")
         return
 
-    sources = ['openalex', 'semantic', 'all']
+    sources = ['openalex', 'semantic', 'dblp', 'all']
 
     for source in sources:
         print(f"  📦 预加载 {source} 数据源...")

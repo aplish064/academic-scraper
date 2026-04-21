@@ -24,8 +24,8 @@ from tqdm.asyncio import tqdm
 OPENALEX_API_BASE = "https://api.openalex.org"
 
 # API 配置
-OPENALEX_API_KEY = "Q5QcudPogcFTfvV7vFOH1r"  # 您的 API Key
-OPENALEX_EMAIL = "1509901785@qq.com"  # 您的邮箱
+OPENALEX_API_KEY = "L9vCNGOe2ILsen4OQP3aPg"  # 您的 API Key
+OPENALEX_EMAIL = "20228132063@m.scnu.edu.cn"  # 您的邮箱
 
 # ClickHouse 配置
 CH_HOST = 'localhost'

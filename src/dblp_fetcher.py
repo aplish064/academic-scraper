@@ -14,6 +14,7 @@ import sys
 import queue
 import threading
 import time
+import re
 import pandas as pd
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -350,12 +351,11 @@ class DBLPStreamingFetcher:
         """Extract paper data from XML element."""
         paper_id = element.get('key')
 
-        # Extract authors
-        authors = [
-            author.text
-            for author in element.findall('author')
-            if author.text
-        ]
+        # Extract authors with ORCID
+        authors = []
+        for author in element.findall('author'):
+            if author.text:
+                authors.append(author.text)
 
         # Extract title and year
         title_elem = element.find('title')
@@ -364,46 +364,125 @@ class DBLPStreamingFetcher:
         year_elem = element.find('year')
         year = year_elem.text if year_elem is not None else None
 
-        # Extract venue (journal/conference name)
-        venue_elem = element.find('venue')
-        venue = venue_elem.text if venue_elem is not None else None
+        # Extract month for publication_date
+        month_elem = element.find('month')
+        month = month_elem.text if month_elem is not None else None
 
-        # Extract DOI
-        doi_elem = element.find('doi')
-        doi = doi_elem.text if doi_elem is not None else None
+        # Combine year and month into publication_date
+        publication_date = None
+        if year:
+            if month:
+                # Clean month value: extract only the month name part
+                # Handles cases like "march15", "January/February", "Winter", etc.
+                month_clean = month.strip()
 
-        # Extract electronic edition (EE) URL
+                # Map month names to numbers (full and abbreviated)
+                month_map = {
+                    'January': '01', 'February': '02', 'March': '03', 'April': '04',
+                    'May': '05', 'June': '06', 'July': '07', 'August': '08',
+                    'September': '09', 'October': '10', 'November': '11', 'December': '12',
+                    'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+                    'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+                    'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+                }
+
+                # Try to find a month name in the month string
+                month_num = None
+                for month_name, month_number in month_map.items():
+                    if month_name.lower() in month_clean.lower():
+                        month_num = month_number
+                        break
+
+                # If month found, format as YYYY-MM
+                if month_num:
+                    publication_date = f"{year}-{month_num}"
+                else:
+                    # No recognizable month, use year only
+                    publication_date = year
+            else:
+                # No month data, use year only
+                publication_date = year
+
+        # Extract venue/journal based on element type
+        venue = None
+        if element.tag == 'article':
+            venue_elem = element.find('journal')
+            venue = venue_elem.text if venue_elem is not None and venue_elem.text else None
+        elif element.tag in ['inproceedings', 'incollection', 'proceedings', 'book']:
+            venue_elem = element.find('booktitle')
+            venue = venue_elem.text if venue_elem is not None and venue_elem.text else None
+
+        # Extract DOI from <ee> tag
+        doi = None
         ee_elem = element.find('ee')
+        ee_type = None
+        if ee_elem is not None and ee_elem.text:
+            ee_text = ee_elem.text
+            ee_type = ee_elem.get('type', '')
+            if 'doi.org/' in ee_text:
+                doi_match = re.search(r'doi\.org/([0-9.]+/[0-9]+)', ee_text)
+                if doi_match:
+                    doi = doi_match.group(1)
+            elif ee_text.startswith('http') and '/' in ee_text:
+                parts = ee_text.rstrip('/').split('/')
+                if parts:
+                    last_part = parts[-1]
+                    if re.search(r'\d+', last_part):
+                        doi = last_part
+
         ee = ee_elem.text if ee_elem is not None else None
 
-        # Extract volume
+        # Extract URL
+        url_elem = element.find('url')
+        url = url_elem.text if url_elem is not None else None
+
+        # Extract publtype attribute
+        publtype = element.get('publtype', '')
+
+        # Extract volume, number, pages, publisher
         volume_elem = element.find('volume')
         volume = volume_elem.text if volume_elem is not None else None
 
-        # Extract number
         number_elem = element.find('number')
         number = number_elem.text if number_elem is not None else None
 
-        # Extract pages
         pages_elem = element.find('pages')
         pages = pages_elem.text if pages_elem is not None else None
 
-        # Extract publisher
         publisher_elem = element.find('publisher')
         publisher = publisher_elem.text if publisher_elem is not None else None
+
+        # Extract series
+        series_elem = element.find('series')
+        series = series_elem.text if series_elem is not None else None
+
+        # Extract editor
+        editor_elem = element.find('editor')
+        editor = editor_elem.text if editor_elem is not None else None
+
+        # Extract school (for theses)
+        school_elem = element.find('school')
+        school = school_elem.text if school_elem is not None else None
 
         return {
             'paper_id': paper_id,
             'authors': authors,
             'title': title,
             'year': year,
+            'publication_date': publication_date,
             'venue': venue,
             'doi': doi,
             'ee': ee,
+            'url': url,
+            'publtype': publtype,
+            'type': ee_type,
             'volume': volume,
             'number': number,
             'pages': pages,
-            'publisher': publisher
+            'publisher': publisher,
+            'series': series,
+            'editor': editor,
+            'school': school
         }
 
 
