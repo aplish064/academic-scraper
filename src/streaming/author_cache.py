@@ -105,3 +105,21 @@ class ThreadSafeAuthorCache:
                 'processed_count': len(self._processed_authors),
                 'pending_count': len(self._author_to_papers) - len(self._processed_authors)
             }
+
+    def get_processed_authors(self) -> Set[str]:
+        """Get set of all processed author names.
+
+        Returns:
+            Set of processed author names for checkpoint saving
+        """
+        with self._lock:
+            return set(self._processed_authors)
+
+    def restore_processed_authors(self, authors: Set[str]) -> None:
+        """Restore processed authors from checkpoint.
+
+        Args:
+            authors: Set of previously processed author names
+        """
+        with self._lock:
+            self._processed_authors = set(authors)

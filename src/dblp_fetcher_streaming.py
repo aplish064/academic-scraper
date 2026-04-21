@@ -99,6 +99,12 @@ class DBLPStreamingFetcher:
         # Initialize author cache
         self.author_cache = ThreadSafeAuthorCache()
 
+        # Restore processed authors from checkpoint
+        checkpoint = self.checkpoint_manager.load_checkpoint()
+        if 'processed_authors' in checkpoint:
+            self.author_cache.restore_processed_authors(set(checkpoint['processed_authors']))
+            print(f"Restored {len(checkpoint['processed_authors'])} processed authors from checkpoint")
+
         # Initialize queue monitor
         self.queue_monitor = QueueMonitor(self.paper_queue, monitor_interval=5.0)
 
