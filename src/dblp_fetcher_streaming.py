@@ -34,7 +34,7 @@ from streaming import (
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 
 # Default file paths
-XML_PATH = "/home/hkustgz/Us/dblp_dump.xml"
+XML_PATH = str(PROJECT_ROOT / "data" / "dblp.xml")
 CHECKPOINT_PATH = str(PROJECT_ROOT / "log" / "checkpoint_streaming.json")
 CSRANKINGS_PATH = str(PROJECT_ROOT / "data" / "csrankings.csv")
 
