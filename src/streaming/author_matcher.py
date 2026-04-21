@@ -130,29 +130,36 @@ class StreamingAuthorMatcher:
             # author_pid, author_name, author_orcid, author_rank, author_role,
             # author_total_papers, author_profile_url, volume, number, pages,
             # publisher, doi, ee, dblp_url, institution, institution_confidence
+
+            # Generate dblp_url from paper_id
+            dblp_url = f"https://dblp.org/rec/{dblp_key}.html" if dblp_key else ''
+
+            # Generate author_pid from paper_id and author rank (unique identifier)
+            author_pid = f"{dblp_key}::{idx + 1}" if dblp_key else ''
+
             row = (
                 safe_str(dblp_key),  # dblp_key
                 '',  # mdate
                 '',  # type
                 safe_str(paper_data.get('title')),  # title
                 safe_str(paper_data.get('year')),  # year
-                '',  # venue
+                safe_str(paper_data.get('venue')),  # venue (from XML)
                 '',  # venue_type
                 '',  # ccf_class
-                '',  # author_pid
+                author_pid,  # author_pid (generated from paper_id + rank)
                 safe_str(author_name),  # author_name
                 safe_str(csrankings_info.get('orcid')),  # author_orcid
                 safe_uint8(idx + 1, 1),  # author_rank (ensure 1-255)
                 '',  # author_role
                 safe_uint32(0),  # author_total_papers
                 safe_str(csrankings_info.get('homepage')),  # author_profile_url
-                '',  # volume
-                '',  # number
-                '',  # pages
-                '',  # publisher
-                '',  # doi
-                '',  # ee
-                '',  # dblp_url
+                safe_str(paper_data.get('volume')),  # volume (from XML)
+                safe_str(paper_data.get('number')),  # number (from XML)
+                safe_str(paper_data.get('pages')),  # pages (from XML)
+                safe_str(paper_data.get('publisher')),  # publisher (from XML)
+                safe_str(paper_data.get('doi')),  # doi (from XML)
+                safe_str(paper_data.get('ee')),  # ee (from XML)
+                dblp_url,  # dblp_url
                 safe_str(csrankings_info.get('affiliation')),  # institution
                 1.0 if csrankings_info.get('affiliation') else 0.0  # institution_confidence
             )

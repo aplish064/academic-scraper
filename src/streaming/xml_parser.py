@@ -44,7 +44,7 @@ class XMLStreamingParser:
             element: lxml Element representing a paper
 
         Returns:
-            Dict with paper_id, authors, title, year
+            Dict with paper_id, authors, title, year, venue, doi, etc.
         """
         paper_id = element.get('key')
 
@@ -62,11 +62,46 @@ class XMLStreamingParser:
         year_elem = element.find('year')
         year = year_elem.text if year_elem is not None else None
 
+        # Extract venue (journal/conference name)
+        venue_elem = element.find('venue')
+        venue = venue_elem.text if venue_elem is not None else None
+
+        # Extract DOI
+        doi_elem = element.find('doi')
+        doi = doi_elem.text if doi_elem is not None else None
+
+        # Extract electronic edition (EE) URL
+        ee_elem = element.find('ee')
+        ee = ee_elem.text if ee_elem is not None else None
+
+        # Extract volume
+        volume_elem = element.find('volume')
+        volume = volume_elem.text if volume_elem is not None else None
+
+        # Extract number
+        number_elem = element.find('number')
+        number = number_elem.text if number_elem is not None else None
+
+        # Extract pages
+        pages_elem = element.find('pages')
+        pages = pages_elem.text if pages_elem is not None else None
+
+        # Extract publisher
+        publisher_elem = element.find('publisher')
+        publisher = publisher_elem.text if publisher_elem is not None else None
+
         return {
             'paper_id': paper_id,
             'authors': authors,
             'title': title,
-            'year': year
+            'year': year,
+            'venue': venue,
+            'doi': doi,
+            'ee': ee,
+            'volume': volume,
+            'number': number,
+            'pages': pages,
+            'publisher': publisher
         }
 
     def _apply_backpressure(self):
