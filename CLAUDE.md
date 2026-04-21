@@ -238,6 +238,17 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+### 5. Git Commit Policy
+
+**Do NOT commit automatically unless explicitly asked.**
+
+- User handles all git commits themselves
+- Only commit when user explicitly requests it
+- If user wants a commit, they will ask: "commit this" or "create a commit"
+- Exception: When explicitly told to "commit after each change" or similar
+
+**Rationale:** User prefers control over their git history and will manage commits themselves.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

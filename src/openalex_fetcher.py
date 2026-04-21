@@ -24,8 +24,8 @@ from tqdm.asyncio import tqdm
 OPENALEX_API_BASE = "https://api.openalex.org"
 
 # API 配置
-OPENALEX_API_KEY = "L9vCNGOe2ILsen4OQP3aPg"  # 您的 API Key
-OPENALEX_EMAIL = "13360197039@163.com"  # 您的邮箱
+OPENALEX_API_KEY = "Q5QcudPogcFTfvV7vFOH1r"  # 您的 API Key
+OPENALEX_EMAIL = "1509901785@qq.com"  # 您的邮箱
 
 # ClickHouse 配置
 CH_HOST = 'localhost'
@@ -138,9 +138,12 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
 
     try:
         import pandas as pd
+        from datetime import datetime
 
         # 数据清洗和类型转换
         cleaned_rows = []
+        current_import_time = datetime.now()  # DateTime对象（包含日期信息）
+
         for row in rows:
             cleaned_row = {}
             for key, value in row.items():
@@ -180,6 +183,9 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
                 else:
                     cleaned_row[key] = str(value) if value is not None else ''
 
+            # 添加import_time字段（DateTime包含日期和时间信息）
+            cleaned_row['import_time'] = current_import_time
+
             cleaned_rows.append(cleaned_row)
 
         # 使用清洗后的数据创建DataFrame
@@ -191,6 +197,9 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
         df['fwci'] = df['fwci'].astype(float)
         df['citation_percentile'] = df['citation_percentile'].astype(int)
         df['is_retracted'] = df['is_retracted'].astype(bool)
+
+        # 确保日期时间列的类型正确
+        df['import_time'] = pd.to_datetime(df['import_time'])
 
         # 使用临时表进行去重
         temp_table = 'temp_openalex_insert_dedup'

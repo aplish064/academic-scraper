@@ -1,8 +1,12 @@
-"""Streaming author matcher for concurrent DBLP API queries and database writes."""
+"""Streaming paper matcher for fast database writes using XML + CSrankings data.
 
-import requests
+Hybrid strategy:
+- Uses XML data (title, authors, year, dblp_key) - no network requests needed
+- Enriches with CSrankings data (ORCID, affiliation, homepage)
+- Fast batch processing without external API calls
+"""
+
 from typing import Dict, Set, Any, Optional, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pandas as pd
 from .author_cache import ThreadSafeAuthorCache
@@ -10,16 +14,14 @@ from .checkpoint_manager import ThreadSafeCheckpointManager
 
 
 class StreamingAuthorMatcher:
-    """Concurrent author matcher that queries DBLP API and writes to database.
+    """Fast author matcher using XML data + CSrankings enrichment.
 
     This component:
-    - Queries DBLP author API concurrently (100 parallel requests)
+    - Processes papers from XML (no network requests)
     - Enriches author data with CSrankings information
-    - Writes authors to database in batches
-    - Manages checkpointing for crash recovery
+    - Writes paper-author relationships to database in batches
+    - Very fast: can process millions of papers
     """
-
-    DBLP_API_URL = "https://dblp.org/search/author/api"
 
     def __init__(
         self,
@@ -27,9 +29,8 @@ class StreamingAuthorMatcher:
         checkpoint_manager: ThreadSafeCheckpointManager,
         csrankings_data: pd.DataFrame,
         db_client,
-        dblp_proxy: Optional[str] = None,
-        max_concurrent: int = 100,
-        batch_size: int = 100
+        max_concurrent: int = 1,  # Not used for network, kept for compatibility
+        batch_size: int = 1000  # Larger batch size for faster processing
     ):
         """Initialize the streaming author matcher.
 
@@ -38,15 +39,12 @@ class StreamingAuthorMatcher:
             checkpoint_manager: Thread-safe checkpoint manager
             csrankings_data: DataFrame with CSrankings author information
             db_client: ClickHouse client for database writes
-            dblp_proxy: Optional proxy for DBLP API requests
-            max_concurrent: Maximum number of concurrent API requests
+            max_concurrent: Not used (kept for API compatibility)
             batch_size: Batch size for database writes
         """
         self.author_cache = author_cache
         self.checkpoint_manager = checkpoint_manager
         self.db_client = db_client
-        self.dblp_proxy = dblp_proxy
-        self.max_concurrent = max_concurrent
         self.batch_size = batch_size
 
         # Build CSrankings lookup dictionary for fast access
@@ -61,115 +59,8 @@ class StreamingAuthorMatcher:
                     'orcid': row.get('orcid', '')
                 }
 
-    def _query_author_api(self, author_name: str) -> Optional[Dict[str, Any]]:
-        """Query DBLP author API for a single author with retry logic.
-
-        Args:
-            author_name: Name of the author to query
-
-        Returns:
-            Dictionary with 'url' and 'orcid' keys, or None if not found
-        """
-        # Retry logic for SSL and proxy errors
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                params = {
-                    'q': author_name,
-                    'format': 'json'
-                }
-
-                proxies = {'http': self.dblp_proxy, 'https': self.dblp_proxy} if self.dblp_proxy else None
-
-                response = requests.get(
-                    self.DBLP_API_URL,
-                    params=params,
-                    proxies=proxies,
-                    timeout=30
-                )
-
-                if response.status_code == 404:
-                    return None
-
-                response.raise_for_status()
-                data = response.json()
-
-                # Extract author information from response
-                result = data.get('result', {})
-                hits = result.get('hits', {})
-                hit_list = hits.get('hit', [])
-
-                if not hit_list:
-                    return None
-
-                # Get first hit
-                first_hit = hit_list[0]
-                info = first_hit.get('info', {})
-
-                # Extract URL
-                url = info.get('url', '')
-
-                # Extract ORCID from notes or persons
-                orcid = ''
-
-                # Try to get ORCID from notes
-                notes = info.get('notes', {})
-                note_list = notes.get('note', [])
-                if isinstance(note_list, list):
-                    for note in note_list:
-                        note_text = note.get('@text', '') if isinstance(note, dict) else str(note)
-                        if 'Orcid:' in note_text:
-                            # Extract ORCID from "Orcid: 0000-0001-2345-6789" format
-                            orcid = note_text.split('Orcid:')[-1].strip()
-                            break
-
-                # Try to get ORCID from persons if not found in notes
-                if not orcid:
-                    persons = info.get('persons', {})
-                    person_list = persons.get('person', [])
-                    if person_list and isinstance(person_list, list) and len(person_list) > 0:
-                        first_person = person_list[0]
-                        if isinstance(first_person, dict):
-                            orcid = first_person.get('orcid', '')
-
-                return {
-                    'url': url,
-                    'orcid': orcid
-                }
-
-            except requests.exceptions.SSLError as e:
-                if attempt < max_retries - 1:
-                    # Retry after delay for SSL errors
-                    import time
-                    time.sleep(2 ** attempt)  # Exponential backoff: 2s, 4s
-                    continue
-                else:
-                    print(f"SSL Error querying author {author_name}: {e}")
-                    return None
-            except requests.exceptions.ProxyError as e:
-                if attempt < max_retries - 1:
-                    # Retry after delay for proxy errors
-                    import time
-                    time.sleep(2 ** attempt)
-                    continue
-                else:
-                    print(f"Proxy Error querying author {author_name}: {e}")
-                    return None
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    import time
-                    time.sleep(2 ** attempt)
-                    continue
-                else:
-                    print(f"Timeout querying author: {author_name}")
-                    return None
-            except requests.exceptions.RequestException as e:
-                # Don't retry on other request exceptions (429, 500, etc)
-                print(f"Error querying author {author_name}: {e}")
-                return None
-
-        # All retries exhausted
-        return None
+        # Track processed papers
+        self._processed_papers: Set[str] = set()
 
     def _get_csrankings_info(self, author_name: str) -> Dict[str, Any]:
         """Lookup author in CSrankings data.
@@ -187,108 +78,112 @@ class StreamingAuthorMatcher:
             'orcid': ''
         })
 
-    def _write_author_to_db(self, author_data: Dict[str, Any]) -> None:
-        """Write a single author to the database.
+    def _process_single_paper(self, paper_data: Dict[str, Any]) -> List[tuple]:
+        """Process a single paper: extract authors, merge with CSrankings data.
 
         Args:
-            author_data: Dictionary containing author information
-        """
-        query = """
-            INSERT INTO authors (
-                name, dblp_url, orcid, affiliation,
-                homepage, scholar_id, papers, updated_at
-            ) VALUES
-        """
-
-        values = (
-            author_data.get('name', ''),
-            author_data.get('dblp_url', ''),
-            author_data.get('orcid', ''),
-            author_data.get('affiliation', ''),
-            author_data.get('homepage', ''),
-            author_data.get('scholar_id', ''),
-            author_data.get('papers', []),
-            author_data.get('updated_at', '')
-        )
-
-        self.db_client.execute(query, [values])
-
-    def _write_authors_batch(self, authors: List[Dict[str, Any]]) -> None:
-        """Write multiple authors to database in a single batch.
-
-        Args:
-            authors: List of author data dictionaries
-        """
-        if not authors:
-            return
-
-        query = """
-            INSERT INTO authors (
-                name, dblp_url, orcid, affiliation,
-                homepage, scholar_id, papers, updated_at
-            ) VALUES
-        """
-
-        values_list = []
-        for author_data in authors:
-            values = (
-                author_data.get('name', ''),
-                author_data.get('dblp_url', ''),
-                author_data.get('orcid', ''),
-                author_data.get('affiliation', ''),
-                author_data.get('homepage', ''),
-                author_data.get('scholar_id', ''),
-                author_data.get('papers', []),
-                author_data.get('updated_at', '')
-            )
-            values_list.append(values)
-
-        self.db_client.insert(query, values_list)
-
-    def _process_single_author(self, author_name: str) -> Dict[str, Any]:
-        """Process a single author: query API, get CSrankings info, merge data.
-
-        Args:
-            author_name: Name of the author to process
+            paper_data: Dictionary with paper_id (dblp_key), authors[], title, year
 
         Returns:
-            Dictionary with status and author data
+            List of tuples (database rows) for insertion
         """
-        # Query DBLP API
-        dblp_info = self._query_author_api(author_name)
+        dblp_key = paper_data['paper_id']
+        xml_authors = paper_data.get('authors', [])
 
-        # Get CSrankings information
-        csrankings_info = self._get_csrankings_info(author_name)
+        # Create rows for each author
+        rows = []
 
-        # Get papers from cache
-        papers = list(self.author_cache.get_papers_for_author(author_name))
+        for idx, author_name in enumerate(xml_authors):
+            # Get CSrankings info
+            csrankings_info = self._get_csrankings_info(author_name)
 
-        # Merge data
-        author_data = {
-            'name': author_name,
-            'dblp_url': dblp_info['url'] if dblp_info else '',
-            'orcid': dblp_info['orcid'] if dblp_info else '',
-            'affiliation': csrankings_info.get('affiliation', ''),
-            'homepage': csrankings_info.get('homepage', ''),
-            'scholar_id': csrankings_info.get('scholarid', ''),
-            'papers': papers,
-            'updated_at': datetime.now().isoformat()
-        }
+            # Helper function to convert None to empty string
+            def safe_str(value):
+                return value if value is not None else ''
 
-        # If not found in DBLP but has CSrankings ORCID, use that
-        if not author_data['orcid'] and csrankings_info.get('orcid'):
-            author_data['orcid'] = csrankings_info.get('orcid', '')
+            # Helper function to ensure integer is safe for UInt8
+            def safe_uint8(value, default=0):
+                if value is None:
+                    return default
+                try:
+                    ivalue = int(value)
+                    # Clamp to 0-255 range
+                    if ivalue < 0:
+                        return 0
+                    if ivalue > 255:
+                        return 255
+                    return ivalue
+                except (ValueError, TypeError):
+                    return default
 
-        return {
-            'status': 'success',
-            'data': author_data
-        }
+            # Helper function to ensure integer is safe for UInt32
+            def safe_uint32(value, default=0):
+                if value is None:
+                    return default
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    return default
 
-    def process_batch(self, author_batch: Set[str]) -> Dict[str, int]:
-        """Process a batch of authors concurrently.
+            # Build the row - must match table column order exactly
+            # dblp_key, mdate, type, title, year, venue, venue_type, ccf_class,
+            # author_pid, author_name, author_orcid, author_rank, author_role,
+            # author_total_papers, author_profile_url, volume, number, pages,
+            # publisher, doi, ee, dblp_url, institution, institution_confidence
+            row = (
+                safe_str(dblp_key),  # dblp_key
+                '',  # mdate
+                '',  # type
+                safe_str(paper_data.get('title')),  # title
+                safe_str(paper_data.get('year')),  # year
+                '',  # venue
+                '',  # venue_type
+                '',  # ccf_class
+                '',  # author_pid
+                safe_str(author_name),  # author_name
+                safe_str(csrankings_info.get('orcid')),  # author_orcid
+                safe_uint8(idx + 1, 1),  # author_rank (ensure 1-255)
+                '',  # author_role
+                safe_uint32(0),  # author_total_papers
+                safe_str(csrankings_info.get('homepage')),  # author_profile_url
+                '',  # volume
+                '',  # number
+                '',  # pages
+                '',  # publisher
+                '',  # doi
+                '',  # ee
+                '',  # dblp_url
+                safe_str(csrankings_info.get('affiliation')),  # institution
+                1.0 if csrankings_info.get('affiliation') else 0.0  # institution_confidence
+            )
+            rows.append(row)
+
+        return rows
+
+    def _write_rows_batch(self, rows: List[tuple]) -> None:
+        """Write multiple rows to database in a single batch.
 
         Args:
-            author_batch: Set of author names to process
+            rows: List of tuples with values in table column order
+        """
+        if not rows:
+            return
+
+        # ClickHouse insert with column names
+        column_names = [
+            'dblp_key', 'mdate', 'type', 'title', 'year', 'venue', 'venue_type', 'ccf_class',
+            'author_pid', 'author_name', 'author_orcid', 'author_rank', 'author_role',
+            'author_total_papers', 'author_profile_url', 'volume', 'number', 'pages',
+            'publisher', 'doi', 'ee', 'dblp_url', 'institution', 'institution_confidence'
+        ]
+
+        self.db_client.insert('dblp', rows, column_names=column_names)
+
+    def process_paper_batch(self, papers: List[Dict[str, Any]]) -> Dict[str, int]:
+        """Process a batch of papers (very fast, no network calls).
+
+        Args:
+            papers: List of paper data dictionaries
 
         Returns:
             Dictionary with statistics (queried, written, failed)
@@ -299,107 +194,125 @@ class StreamingAuthorMatcher:
             'failed': 0
         }
 
-        if not author_batch:
+        if not papers:
             return stats
 
-        # Process authors concurrently
-        authors_to_write = []
+        # Process all papers (no threading needed, just CPU work)
+        all_rows = []
 
-        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
-            # Submit all queries
-            future_to_author = {
-                executor.submit(self._process_single_author, author): author
-                for author in author_batch
-            }
+        for paper in papers:
+            dblp_key = paper.get('paper_id', 'unknown')
+            try:
+                rows = self._process_single_paper(paper)
+                stats['queried'] += 1
+                all_rows.extend(rows)
 
-            # Collect results as they complete
-            for future in as_completed(future_to_author):
-                author_name = future_to_author[future]
-                try:
-                    result = future.result()
-                    stats['queried'] += 1
+                # Mark paper as processed
+                self._processed_papers.add(dblp_key)
 
-                    if result['status'] == 'success':
-                        authors_to_write.append(result['data'])
+            except Exception as e:
+                print(f"Error processing paper {dblp_key}: {e}")
+                stats['failed'] += 1
 
-                        # Write in batches
-                        if len(authors_to_write) >= self.batch_size:
-                            self._write_authors_batch(authors_to_write)
-                            stats['written'] += len(authors_to_write)
-                            authors_to_write.clear()
-
-                        # Mark as processed in cache
-                        self.author_cache.mark_processed(author_name)
-
-                except Exception as e:
-                    print(f"Error processing author {author_name}: {e}")
-                    stats['failed'] += 1
-
-        # Write remaining authors
-        if authors_to_write:
-            self._write_authors_batch(authors_to_write)
-            stats['written'] += len(authors_to_write)
-
-        # Save checkpoint
-        self.checkpoint_manager.update_progress(
-            'author_matcher',
-            {
-                'total_processed': stats['queried'],
-                'total_written': stats['written']
-            }
-        )
-
-        # Save processed authors to checkpoint for recovery
-        processed_authors_list = list(self.author_cache.get_processed_authors())
-        self.checkpoint_manager.save_checkpoint({
-            'parsed_chunks': self.checkpoint_manager.get_parsed_chunks(),
-            'author_progress': {
-                'total_queued': 0,  # Can be calculated from cache
-                'queried': stats['queried'],
-                'processed': stats['written']
-            },
-            'processed_authors': processed_authors_list,
-            'db_stats': {
-                'authors_written': stats['written'],
-                'papers_written': 0  # Would need to track this
-            },
-            'last_updated': datetime.now().isoformat()
-        })
+        # Write all rows in one batch
+        if all_rows:
+            self._write_rows_batch(all_rows)
+            stats['written'] += len(all_rows)
 
         return stats
 
-    def run(self, batch_size: int = 100) -> Dict[str, int]:
-        """Continuous loop processing authors from cache until no more remain.
+    def run(self, batch_size: int = 1000) -> Dict[str, int]:
+        """Continuous loop processing papers from cache until no more remain.
+
+        Very fast processing - no network calls.
 
         Args:
-            batch_size: Number of authors to process per batch
+            batch_size: Number of papers to process per batch
 
         Returns:
             Final statistics dictionary
         """
         total_stats = {
-            'queried': 0,
-            'written': 0,
-            'failed': 0
+            'total_queried': 0,
+            'written_rows': 0,
+            'failed_papers': 0
         }
 
-        while True:
-            # Get next batch of unprocessed authors
-            authors_to_process = self.author_cache.get_authors_to_query(batch_size)
+        processed_count = 0
+        batch_num = 0
 
-            if not authors_to_process:
-                # No more authors to process
+        while True:
+            # Get papers from cache
+            papers_to_process = []
+
+            # Collect unique paper IDs - directly access processed papers
+            # to find unprocessed ones
+            all_paper_ids = set()
+
+            # Get all authors (including partially processed ones)
+            with self.author_cache._lock:
+                all_paper_ids = set(self.author_cache._paper_objects.keys()) - self._processed_papers
+
+            if not all_paper_ids:
+                # No more unprocessed papers
                 break
 
+            # Take next batch
+            paper_ids = list(all_paper_ids)[:batch_size]
+
+            if not paper_ids:
+                break
+
+            # Get complete paper objects
+            papers_to_process = self.author_cache.get_paper_objects(set(paper_ids))
+
             # Process the batch
-            batch_stats = self.process_batch(authors_to_process)
+            batch_stats = self.process_paper_batch(papers_to_process)
+
+            # Mark papers as processed
+            for paper_id in paper_ids:
+                self._processed_papers.add(paper_id)
 
             # Accumulate statistics
-            total_stats['queried'] += batch_stats['queried']
-            total_stats['written'] += batch_stats['written']
-            total_stats['failed'] += batch_stats['failed']
+            total_stats['total_queried'] += batch_stats['queried']
+            total_stats['written_rows'] += batch_stats['written']
+            total_stats['failed_papers'] += batch_stats['failed']
 
-            print(f"Processed batch: {batch_stats['queried']} authors, "
-                  f"{batch_stats['written']} written, {batch_stats['failed']} failed")
+            processed_count += batch_stats['queried']
+            batch_num += 1
+
+            # Print progress every 10 batches
+            if batch_num % 10 == 0:
+                progress_pct = (total_stats['total_queried'] / 8350000) * 100
+                print(f"Progress: {progress_pct:.2f}% | Batch {batch_num} | "
+                      f"Papers: {batch_stats['queried']}, Rows: {batch_stats['written']}")
+
+            # Save checkpoint every 10000 papers
+            if processed_count >= 10000:
+                processed_authors_list = list(self.author_cache.get_processed_authors())
+                self.checkpoint_manager.save_checkpoint({
+                    'parsed_chunks': self.checkpoint_manager.get_parsed_chunks(),
+                    'paper_progress': {
+                        'total_queried': total_stats['total_queried'],
+                        'written_rows': total_stats['written_rows']
+                    },
+                    'processed_authors': processed_authors_list,
+                    'processed_papers': list(self._processed_papers),
+                    'last_updated': datetime.now().isoformat()
+                })
+                processed_count = 0
+
+        # Final checkpoint
+        processed_authors_list = list(self.author_cache.get_processed_authors())
+        self.checkpoint_manager.save_checkpoint({
+            'parsed_chunks': self.checkpoint_manager.get_parsed_chunks(),
+            'paper_progress': {
+                'total_queried': total_stats['total_queried'],
+                'written_rows': total_stats['written_rows']
+            },
+            'processed_authors': processed_authors_list,
+            'processed_papers': list(self._processed_papers),
+            'last_updated': datetime.now().isoformat()
+        })
 
         return total_stats

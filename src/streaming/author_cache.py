@@ -1,22 +1,23 @@
 """Thread-safe cache for aggregating papers by author."""
 
 from threading import Lock
-from typing import Dict, Set
+from typing import Dict, Set, List
 
 
 class ThreadSafeAuthorCache:
-    """Thread-safe cache storing paper IDs grouped by author.
+    """Thread-safe cache storing paper objects grouped by author.
 
     This cache is used by the streaming DBLP fetcher to:
-    - Aggregate papers by author as they're consumed from the XML parsing queue
-    - Track which authors have been processed (queried against DBLP API)
-    - Provide batches of unprocessed authors for concurrent querying
+    - Aggregate complete paper objects by author
+    - Track which authors have been processed
+    - Provide batches of unprocessed authors
     """
 
     def __init__(self):
         """Initialize the cache with thread-safe data structures."""
         self._lock = Lock()
-        self._author_to_papers: Dict[str, Set[str]] = {}
+        self._author_to_papers: Dict[str, Set[str]] = {}  # author -> paper_ids
+        self._paper_objects: Dict[str, dict] = {}  # paper_id -> paper object
         self._processed_authors: Set[str] = set()
         self._total_papers = 0
 
@@ -31,7 +32,11 @@ class ThreadSafeAuthorCache:
         authors = paper['authors']
 
         with self._lock:
+            # Store complete paper object
+            self._paper_objects[paper_id] = paper
             self._total_papers += 1
+
+            # Update author mappings
             for author in authors:
                 if author not in self._author_to_papers:
                     self._author_to_papers[author] = set()
@@ -66,6 +71,22 @@ class ThreadSafeAuthorCache:
                 # Return a copy to prevent external modification
                 return set(self._author_to_papers[author_name])
             return set()
+
+    def get_paper_objects(self, paper_ids: Set[str]) -> List[dict]:
+        """Get complete paper objects for a set of paper IDs.
+
+        Args:
+            paper_ids: Set of paper IDs to retrieve
+
+        Returns:
+            List of paper dictionaries
+        """
+        with self._lock:
+            return [
+                self._paper_objects[paper_id]
+                for paper_id in paper_ids
+                if paper_id in self._paper_objects
+            ]
 
     def mark_processed(self, author_name: str) -> None:
         """Mark an author as processed (queried against DBLP).

@@ -40,10 +40,11 @@ CSRANKINGS_PATH = str(PROJECT_ROOT / "data" / "csrankings.csv")
 
 # Concurrency settings
 QUEUE_SIZE = 10000
-AUTHOR_API_CONCURRENT = 5  # Reduced to 5 to avoid SSL/proxy errors
+AUTHOR_API_CONCURRENT = 1  # Not used for hybrid strategy (XML + CSrankings only)
 
-# Proxy settings (if needed)
-DBLP_PROXY = {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}
+# Proxy settings - NOT NEEDED for hybrid strategy
+# We only use XML data + CSrankings, no network requests to DBLP
+DBLP_PROXY = None
 
 
 # =============================================================================
@@ -117,9 +118,9 @@ class DBLPStreamingFetcher:
             self.db_client = clickhouse_connect.get_client(
                 host='localhost',
                 port=8123,
-                database='academic'
+                database='academic_db'
             )
-            print("✅ Connected to ClickHouse database")
+            print("✅ Connected to ClickHouse database academic_db")
         else:
             self.db_client = db_client
 
@@ -212,8 +213,8 @@ class DBLPStreamingFetcher:
         stats = {
             'papers_parsed': 0,
             'papers_consumed': 0,
-            'authors_queried': 0,
-            'authors_written': 0
+            'papers_queried': 0,
+            'rows_written': 0
         }
 
         print("🚀 Starting DBLP Streaming Fetcher")
@@ -276,27 +277,27 @@ class DBLPStreamingFetcher:
         print(f"   Total authors: {cache_stats['total_authors']:,}")
         print(f"   Pending processing: {cache_stats['pending_count']:,}")
 
-        # Step 6: Process authors with DBLP API
-        print(f"\n🔍 Processing authors with DBLP API...")
+        # Step 6: Process papers with XML data + CSrankings (hybrid strategy)
+        print(f"\n📝 Processing papers with XML data + CSrankings (fast mode)...")
         self.author_matcher = StreamingAuthorMatcher(
             author_cache=self.author_cache,
             checkpoint_manager=self.checkpoint_manager,
             csrankings_data=self.csrankings_df,
             db_client=self.db_client,
             max_concurrent=self.max_concurrent,
-            dblp_proxy=DBLP_PROXY.get('http')
+            batch_size=1000  # Larger batch for faster processing
         )
 
-        matcher_stats = self.author_matcher.run(batch_size=100)
-        stats['authors_queried'] = matcher_stats.get('total_queried', 0)
-        stats['authors_written'] = matcher_stats.get('written_rows', 0)
+        matcher_stats = self.author_matcher.run(batch_size=1000)
+        stats['papers_queried'] = matcher_stats.get('total_queried', 0)
+        stats['rows_written'] = matcher_stats.get('written_rows', 0)
 
         # Final summary
         print(f"\n🎉 Pipeline complete!")
         print(f"   Papers parsed: {stats['papers_parsed']:,}")
         print(f"   Papers consumed: {stats['papers_consumed']:,}")
-        print(f"   Authors queried: {stats['authors_queried']:,}")
-        print(f"   Authors written: {stats['authors_written']:,}")
+        print(f"   Papers queried: {stats['papers_queried']:,}")
+        print(f"   Author rows written: {stats['rows_written']:,}")
 
         return stats
 
