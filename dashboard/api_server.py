@@ -355,6 +355,19 @@ def get_aggregated_data():
             FROM {table_name}
             SETTINGS max_threads=4, max_execution_time=30
             """
+        elif source == 'dblp':
+            # DBLP字段有限，使用简化统计
+            stats_sql = f"""
+            SELECT
+                uniqHLL12(doi) as total_papers,
+                uniqHLL12(author_pid) as unique_authors,
+                uniqHLL12(venue) as unique_journals,
+                0 as unique_institutions,
+                0 as high_citations,
+                0 as avg_fwci
+            FROM {table_name}
+            SETTINGS max_threads=1, max_execution_time=30
+            """
         else:
             # Semantic字段较少，使用简化统计
             stats_sql = f"""
@@ -398,6 +411,19 @@ def get_aggregated_data():
         SETTINGS max_threads=1
         """
 
+        # DBLP使用year字段而非publication_date
+        if source == 'dblp':
+            date_sql = f"""
+            SELECT
+                year as date,
+                uniqHLL12(doi) as count
+            FROM {table_name}
+            WHERE year != '' AND length(year) = 4
+            GROUP BY year
+            ORDER BY year DESC
+            SETTINGS max_threads=1
+            """
+
         date_result = query_clickhouse(date_sql)
         if date_result:
             for row in date_result.result_rows:
@@ -434,6 +460,11 @@ def get_aggregated_data():
         step_time = time.time() - step_start
         print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
 
+        # DBLP没有citation_count字段，跳过引用数分布
+        if source == 'dblp':
+            result['citations_distribution'] = {}
+            print(f"  ✓ 跳过引用数分布 (DBLP无此字段)")
+
         # 4. 作者类型分布（基于tag字段）
         step_start = time.time()
         print(f"[步骤 4/8] 作者类型分布查询...")
@@ -459,15 +490,21 @@ def get_aggregated_data():
         # 5. Top期刊 - 使用DOI去重
         step_start = time.time()
         print(f"[步骤 5/8] Top期刊查询...")
+        # DBLP使用venue字段，其他数据源使用journal字段
+        if source == 'dblp':
+            journal_field = 'venue'
+        else:
+            journal_field = 'journal'
+
         journal_sql = f"""
         SELECT
-            journal,
+            {journal_field},
             uniqHLL12(doi) as count
         FROM {table_name}
-        WHERE journal != ''
-            AND length(journal) > 3
-            AND lower(journal) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
-        GROUP BY journal
+        WHERE {journal_field} != ''
+            AND length({journal_field}) > 3
+            AND lower({journal_field}) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
+        GROUP BY {journal_field}
         ORDER BY count DESC
         LIMIT 50
         SETTINGS max_threads=8, max_execution_time=60
