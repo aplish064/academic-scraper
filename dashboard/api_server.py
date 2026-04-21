@@ -1163,7 +1163,7 @@ def preload_all_caches():
         print("⚠️  缓存未启用，跳过预加载")
         return
 
-    sources = ['openalex', 'semantic', 'all']
+    sources = ['openalex', 'semantic', 'dblp', 'all']
 
     for source in sources:
         print(f"  📦 预加载 {source} 数据源...")
@@ -1252,7 +1252,7 @@ if __name__ == '__main__':
         print("\n" + "="*60)
         print("🔄 清除启动时的旧缓存...")
         print("="*60)
-        sources = ['openalex', 'semantic', 'all']
+        sources = ['openalex', 'semantic', 'dblp', 'all']
         for source in sources:
             cache_key = get_cache_key(source)
             try:
