@@ -332,6 +332,7 @@ def get_aggregated_data():
         'top_journals': {},
         'top_countries': {},
         'institution_types': {},
+        'venue_type_distribution': {},
         'fwci_distribution': {},
         'statistics': {},
         'source': source,
@@ -465,19 +466,31 @@ def get_aggregated_data():
             result['citations_distribution'] = {}
             print(f"  ✓ 跳过引用数分布 (DBLP无此字段)")
 
-        # 4. 作者类型分布（基于tag字段）
+        # 4. 作者类型分布（基于tag字段或CCF等级）
         step_start = time.time()
-        print(f"[步骤 4/8] 作者类型分布查询...")
-        author_sql = f"""
-        SELECT
-            tag,
-            count() as count
-        FROM {table_name}
-        WHERE tag != ''
-        GROUP BY tag
-        ORDER BY count DESC
-        LIMIT 10
-        """
+        print(f"[步骤 4/9] 作者类型/CCF等级分布查询...")
+        if source == 'dblp':
+            author_sql = f"""
+            SELECT
+                ccf_class,
+                count() as count
+            FROM {table_name}
+            WHERE ccf_class != '' AND ccf_class != 'nan'
+            GROUP BY ccf_class
+            ORDER BY count DESC
+            LIMIT 10
+            """
+        else:
+            author_sql = f"""
+            SELECT
+                tag,
+                count() as count
+            FROM {table_name}
+            WHERE tag != ''
+            GROUP BY tag
+            ORDER BY count DESC
+            LIMIT 10
+            """
 
         author_result = query_clickhouse(author_sql)
         if author_result:
@@ -517,9 +530,32 @@ def get_aggregated_data():
         step_time = time.time() - step_start
         print(f"  ✓ 完成 (耗时: {step_time:.2f}秒, 期刊数: {len(result['top_journals'])})")
 
-        # 6. Top国家（仅OpenAlex支持）- 使用DOI去重
+        # 6.1 Venue类型分布（仅DBLP支持）
         step_start = time.time()
-        print(f"[步骤 6/8] Top国家查询...")
+        print(f"[步骤 6.1/9] Venue类型分布查询...")
+        if source == 'dblp':
+            venue_type_sql = f"""
+            SELECT
+                venue_type,
+                uniqHLL12(doi) as count
+            FROM {table_name}
+            WHERE venue_type != '' AND venue_type != 'nan'
+            GROUP BY venue_type
+            ORDER BY count DESC
+            """
+
+            venue_type_result = query_clickhouse(venue_type_sql)
+            if venue_type_result:
+                for row in venue_type_result.result_rows:
+                    result['venue_type_distribution'][row[0]] = int(row[1])
+            step_time = time.time() - step_start
+            print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
+        else:
+            print(f"  ⊘ 跳过 (仅DBLP支持)")
+
+        # 7. Top国家（仅OpenAlex支持）- 使用DOI去重
+        step_start = time.time()
+        print(f"[步骤 7/9] Top国家查询...")
         if source == 'openalex':
             country_sql = f"""
             SELECT
@@ -546,7 +582,7 @@ def get_aggregated_data():
 
         # 7. 机构类型分布（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 7/8] 机构类型分布查询...")
+        print(f"[步骤 8/9] 机构类型分布查询...")
         if source == 'openalex':
             inst_type_sql = f"""
             SELECT
@@ -571,7 +607,7 @@ def get_aggregated_data():
 
         # 8. FWCI分布（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 8/8] FWCI分布查询...")
+        print(f"[步骤 9/9] FWCI分布查询...")
         if source == 'openalex':
             fwci_sql = f"""
             SELECT
