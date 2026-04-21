@@ -40,7 +40,7 @@ CSRANKINGS_PATH = str(PROJECT_ROOT / "data" / "csrankings.csv")
 
 # Concurrency settings
 QUEUE_SIZE = 10000
-AUTHOR_API_CONCURRENT = 100
+AUTHOR_API_CONCURRENT = 20  # Reduced from 100 to avoid SSL errors
 
 # Proxy settings (if needed)
 DBLP_PROXY = {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}
@@ -113,18 +113,13 @@ class DBLPStreamingFetcher:
 
         # Create or use provided database client
         if db_client is None:
-            try:
-                import clickhouse_connect
-                self.db_client = clickhouse_connect.get_client(
-                    host='localhost',
-                    port=8123,
-                    database='academic'
-                )
-                print("✅ Connected to ClickHouse database")
-            except Exception as e:
-                print(f"⚠️  Failed to connect to ClickHouse: {e}")
-                print("   Will run in dry-run mode (no database writes)")
-                self.db_client = None
+            import clickhouse_connect
+            self.db_client = clickhouse_connect.get_client(
+                host='localhost',
+                port=8123,
+                database='academic'
+            )
+            print("✅ Connected to ClickHouse database")
         else:
             self.db_client = db_client
 
