@@ -40,7 +40,7 @@ CSRANKINGS_PATH = str(PROJECT_ROOT / "data" / "csrankings.csv")
 
 # Concurrency settings
 QUEUE_SIZE = 10000
-AUTHOR_API_CONCURRENT = 20  # Reduced from 100 to avoid SSL errors
+AUTHOR_API_CONCURRENT = 5  # Reduced to 5 to avoid SSL/proxy errors
 
 # Proxy settings (if needed)
 DBLP_PROXY = {'http': '127.0.0.1:7890', 'https': '127.0.0.1:7890'}

@@ -62,7 +62,7 @@ class StreamingAuthorMatcher:
                 }
 
     def _query_author_api(self, author_name: str) -> Optional[Dict[str, Any]]:
-        """Query DBLP author API for a single author.
+        """Query DBLP author API for a single author with retry logic.
 
         Args:
             author_name: Name of the author to query
@@ -70,23 +70,26 @@ class StreamingAuthorMatcher:
         Returns:
             Dictionary with 'url' and 'orcid' keys, or None if not found
         """
-        try:
-            params = {
-                'q': author_name,
-                'format': 'json'
-            }
+        # Retry logic for SSL and proxy errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                params = {
+                    'q': author_name,
+                    'format': 'json'
+                }
 
-            proxies = {'http': self.dblp_proxy, 'https': self.dblp_proxy} if self.dblp_proxy else None
+                proxies = {'http': self.dblp_proxy, 'https': self.dblp_proxy} if self.dblp_proxy else None
 
-            response = requests.get(
-                self.DBLP_API_URL,
-                params=params,
-                proxies=proxies,
-                timeout=30
-            )
+                response = requests.get(
+                    self.DBLP_API_URL,
+                    params=params,
+                    proxies=proxies,
+                    timeout=30
+                )
 
-            if response.status_code == 404:
-                return None
+                if response.status_code == 404:
+                    return None
 
             response.raise_for_status()
             data = response.json()
@@ -134,11 +137,39 @@ class StreamingAuthorMatcher:
                 'orcid': orcid
             }
 
-        except requests.exceptions.Timeout:
-            print(f"Timeout querying author: {author_name}")
-            return None
-        except requests.exceptions.RequestException as e:
-            print(f"Error querying author {author_name}: {e}")
+            except requests.exceptions.SSLError as e:
+                if attempt < max_retries - 1:
+                    # Retry after delay for SSL errors
+                    import time
+                    time.sleep(2 ** attempt)  # Exponential backoff: 2s, 4s
+                    continue
+                else:
+                    print(f"SSL Error querying author {author_name}: {e}")
+                    return None
+            except requests.exceptions.ProxyError as e:
+                if attempt < max_retries - 1:
+                    # Retry after delay for proxy errors
+                    import time
+                    time.sleep(2 ** attempt)
+                    continue
+                else:
+                    print(f"Proxy Error querying author {author_name}: {e}")
+                    return None
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(2 ** attempt)
+                    continue
+                else:
+                    print(f"Timeout querying author: {author_name}")
+                    return None
+            except requests.exceptions.RequestException as e:
+                # Don't retry on other request exceptions (429, 500, etc)
+                print(f"Error querying author {author_name}: {e}")
+                return None
+
+        # All retries exhausted
+        return None
             return None
 
     def _get_csrankings_info(self, author_name: str) -> Dict[str, Any]:
@@ -213,7 +244,7 @@ class StreamingAuthorMatcher:
             )
             values_list.append(values)
 
-        self.db_client.execute(query, values_list)
+        self.db_client.insert(query, values_list)
 
     def _process_single_author(self, author_name: str) -> Dict[str, Any]:
         """Process a single author: query API, get CSrankings info, merge data.
