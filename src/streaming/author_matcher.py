@@ -192,6 +192,10 @@ class StreamingAuthorMatcher:
         if not authors:
             return
 
+        if self.db_client is None:
+            # Dry-run mode - skip database writes
+            return
+
         query = """
             INSERT INTO authors (
                 name, dblp_url, orcid, affiliation,

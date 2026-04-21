@@ -112,7 +112,21 @@ class DBLPStreamingFetcher:
         self.csrankings_df = self._load_csrankings()
 
         # Create or use provided database client
-        self.db_client = db_client
+        if db_client is None:
+            try:
+                import clickhouse_connect
+                self.db_client = clickhouse_connect.get_client(
+                    host='localhost',
+                    port=8123,
+                    database='academic'
+                )
+                print("✅ Connected to ClickHouse database")
+            except Exception as e:
+                print(f"⚠️  Failed to connect to ClickHouse: {e}")
+                print("   Will run in dry-run mode (no database writes)")
+                self.db_client = None
+        else:
+            self.db_client = db_client
 
         # Initialize components (will be created in run())
         self.xml_parser = None
