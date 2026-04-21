@@ -91,51 +91,51 @@ class StreamingAuthorMatcher:
                 if response.status_code == 404:
                     return None
 
-            response.raise_for_status()
-            data = response.json()
+                response.raise_for_status()
+                data = response.json()
 
-            # Extract author information from response
-            result = data.get('result', {})
-            hits = result.get('hits', {})
-            hit_list = hits.get('hit', [])
+                # Extract author information from response
+                result = data.get('result', {})
+                hits = result.get('hits', {})
+                hit_list = hits.get('hit', [])
 
-            if not hit_list:
-                return None
+                if not hit_list:
+                    return None
 
-            # Get first hit
-            first_hit = hit_list[0]
-            info = first_hit.get('info', {})
+                # Get first hit
+                first_hit = hit_list[0]
+                info = first_hit.get('info', {})
 
-            # Extract URL
-            url = info.get('url', '')
+                # Extract URL
+                url = info.get('url', '')
 
-            # Extract ORCID from notes or persons
-            orcid = ''
+                # Extract ORCID from notes or persons
+                orcid = ''
 
-            # Try to get ORCID from notes
-            notes = info.get('notes', {})
-            note_list = notes.get('note', [])
-            if isinstance(note_list, list):
-                for note in note_list:
-                    note_text = note.get('@text', '') if isinstance(note, dict) else str(note)
-                    if 'Orcid:' in note_text:
-                        # Extract ORCID from "Orcid: 0000-0001-2345-6789" format
-                        orcid = note_text.split('Orcid:')[-1].strip()
-                        break
+                # Try to get ORCID from notes
+                notes = info.get('notes', {})
+                note_list = notes.get('note', [])
+                if isinstance(note_list, list):
+                    for note in note_list:
+                        note_text = note.get('@text', '') if isinstance(note, dict) else str(note)
+                        if 'Orcid:' in note_text:
+                            # Extract ORCID from "Orcid: 0000-0001-2345-6789" format
+                            orcid = note_text.split('Orcid:')[-1].strip()
+                            break
 
-            # Try to get ORCID from persons if not found in notes
-            if not orcid:
-                persons = info.get('persons', {})
-                person_list = persons.get('person', [])
-                if person_list and isinstance(person_list, list) and len(person_list) > 0:
-                    first_person = person_list[0]
-                    if isinstance(first_person, dict):
-                        orcid = first_person.get('orcid', '')
+                # Try to get ORCID from persons if not found in notes
+                if not orcid:
+                    persons = info.get('persons', {})
+                    person_list = persons.get('person', [])
+                    if person_list and isinstance(person_list, list) and len(person_list) > 0:
+                        first_person = person_list[0]
+                        if isinstance(first_person, dict):
+                            orcid = first_person.get('orcid', '')
 
-            return {
-                'url': url,
-                'orcid': orcid
-            }
+                return {
+                    'url': url,
+                    'orcid': orcid
+                }
 
             except requests.exceptions.SSLError as e:
                 if attempt < max_retries - 1:
@@ -170,7 +170,6 @@ class StreamingAuthorMatcher:
 
         # All retries exhausted
         return None
-            return None
 
     def _get_csrankings_info(self, author_name: str) -> Dict[str, Any]:
         """Lookup author in CSrankings data.
