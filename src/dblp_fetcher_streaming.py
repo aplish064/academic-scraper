@@ -193,113 +193,219 @@ class DBLPStreamingFetcher:
         return consumed
 
     def run(self) -> Dict[str, int]:
-        """Run the complete streaming pipeline.
+        """Run the complete streaming pipeline with chunk-by-chunk processing.
 
-        Orchestrates the entire workflow:
-        1. Start queue monitor
-        2. Start consumer thread
-        3. Parse XML (producer)
-        4. Wait for consumer to finish
-        5. Stop queue monitor
-        6. Process authors with DBLP API
+        New streaming workflow:
+        1. Parse XML and process each chunk immediately (no queue, no threads)
+        2. For each chunk (10,000 papers):
+           - Process papers
+           - Write to database
+           - Save checkpoint
+           - Clear memory
+        3. Continue until all papers processed
 
         Returns:
             Dictionary with statistics:
             - papers_parsed: Number of papers parsed from XML
-            - papers_consumed: Number of papers consumed from queue
-            - authors_queried: Number of authors queried against API
-            - authors_written: Number of authors written to database
+            - rows_written: Number of author rows written to database
         """
         stats = {
             'papers_parsed': 0,
-            'papers_consumed': 0,
-            'papers_queried': 0,
             'rows_written': 0
         }
 
-        print("🚀 Starting DBLP Streaming Fetcher")
+        print("🚀 Starting DBLP Streaming Fetcher (Chunk-based)")
         print(f"   XML: {self.xml_path}")
         print(f"   Checkpoint: {self.checkpoint_path}")
-        print(f"   Queue size: {self.queue_size:,}")
-        print(f"   Max concurrent: {self.max_concurrent:,}")
+        print(f"   CSrankings: {self.csrankings_path}")
 
-        # Step 1: Start queue monitor
-        print("\n📊 Starting queue monitor...")
-        self.queue_monitor.start()
-
-        # Step 2: Start consumer thread
-        print("\n🔄 Starting consumer thread...")
-        consumer_thread = threading.Thread(
-            target=self._consume_papers_from_queue,
-            daemon=True
-        )
-        consumer_thread.start()
-
-        # Step 3: Parse XML (producer)
-        print("\n📖 Parsing XML file...")
-        self.xml_parser = XMLStreamingParser(
-            xml_path=self.xml_path,
-            paper_queue=self.paper_queue,
-            checkpoint_manager=self.checkpoint_manager,
-            checkpoint_interval=10000,
-            backpressure_threshold=0.9
-        )
-
-        start_time = time.time()
-        papers_parsed = self.xml_parser.parse()
-        stats['papers_parsed'] = papers_parsed
-
-        # Signal parsing is complete
-        self._parsing_complete = True
-
-        parse_time = time.time() - start_time
-        print(f"\n✅ XML parsing complete: {papers_parsed:,} papers in {parse_time:.1f}s")
-
-        # Step 4: Wait for consumer to finish
-        print("\n⏳ Waiting for consumer to finish...")
-        consumer_thread.join(timeout=300)  # 5 minute timeout
-
-        if consumer_thread.is_alive():
-            print("⚠️  Consumer thread timeout (5 minutes)")
-        else:
-            print("✅ Consumer thread finished")
-
-        stats['papers_consumed'] = self._papers_consumed = self._papers_consumed or papers_parsed
-
-        # Step 5: Stop queue monitor
-        print("\n🛑 Stopping queue monitor...")
-        self.queue_monitor.stop()
-
-        # Print cache statistics
-        cache_stats = self.author_cache.get_stats()
-        print(f"\n📦 Cache statistics:")
-        print(f"   Total papers: {cache_stats['total_papers']:,}")
-        print(f"   Total authors: {cache_stats['total_authors']:,}")
-        print(f"   Pending processing: {cache_stats['pending_count']:,}")
-
-        # Step 6: Process papers with XML data + CSrankings (hybrid strategy)
-        print(f"\n📝 Processing papers with XML data + CSrankings (fast mode)...")
+        # Initialize author matcher upfront
+        print(f"\n📝 Initializing author matcher...")
         self.author_matcher = StreamingAuthorMatcher(
             author_cache=self.author_cache,
             checkpoint_manager=self.checkpoint_manager,
             csrankings_data=self.csrankings_df,
             db_client=self.db_client,
             max_concurrent=self.max_concurrent,
-            batch_size=1000  # Larger batch for faster processing
+            batch_size=10000  # Process 10k papers at a time
         )
 
-        matcher_stats = self.author_matcher.run(batch_size=1000)
-        stats['papers_queried'] = matcher_stats.get('total_queried', 0)
-        stats['rows_written'] = matcher_stats.get('written_rows', 0)
+        # Load checkpoint to get last processed chunk
+        checkpoint = self.checkpoint_manager.load_checkpoint()
+        start_chunk = checkpoint.get('last_processed_chunk', 0)
+
+        if start_chunk > 0:
+            print(f"📂 Resuming from chunk #{start_chunk}")
+
+        # Stream XML and process chunk by chunk
+        print(f"\n📖 Starting XML parsing and chunk processing...")
+        start_time = time.time()
+
+        chunk_papers = []
+        chunk_count = 0
+        paper_count = 0
+
+        try:
+            # Use iterparse for streaming with constant memory
+            context = etree.iterparse(
+                self.xml_path,
+                events=('end',),
+                recover=True
+            )
+
+            for event, element in context:
+                try:
+                    # Only process paper type elements
+                    if element.tag not in XMLStreamingParser.PAPER_TAGS:
+                        continue
+
+                    # Extract paper data
+                    paper_data = self._extract_paper_data(element)
+
+                    # Only queue papers with both paper_id and authors
+                    if paper_data['paper_id'] and paper_data.get('authors'):
+                        # Add to author cache
+                        self.author_cache.add_paper(paper_data)
+                        chunk_papers.append(paper_data)
+                        paper_count += 1
+
+                        # Process chunk when threshold reached
+                        if len(chunk_papers) >= 10000:
+                            chunk_count += 1
+
+                            # Skip if already processed
+                            if chunk_count <= start_chunk:
+                                print(f"⏭️  Skipping chunk #{chunk_count} (already processed)")
+                                # Clear from cache
+                                for paper in chunk_papers:
+                                    self.author_cache.mark_processed(paper['paper_id'])
+                                chunk_papers = []
+                                element.clear()
+                                continue
+
+                            print(f"\n📦 Processing chunk #{chunk_count} ({len(chunk_papers):,} papers)...")
+
+                            # Process this chunk
+                            chunk_stats = self.author_matcher.process_paper_batch(chunk_papers)
+
+                            # Update statistics
+                            stats['papers_parsed'] += chunk_stats['queried']
+                            stats['rows_written'] += chunk_stats['written']
+
+                            print(f"   ✓ Queried: {chunk_stats['queried']:,}, Written: {chunk_stats['written']:,} rows")
+
+                            # Save checkpoint
+                            elapsed = time.time() - start_time
+                            print(f"   💾 Saving checkpoint (chunk #{chunk_count})...")
+                            self.checkpoint_manager.save_checkpoint({
+                                'last_processed_chunk': chunk_count,
+                                'total_papers_parsed': stats['papers_parsed'],
+                                'total_rows_written': stats['rows_written'],
+                                'last_updated': time.strftime('%Y-%m-%d %H:%M:%S')
+                            })
+
+                            # Clear papers from cache
+                            for paper in chunk_papers:
+                                self.author_cache.mark_processed(paper['paper_id'])
+                            chunk_papers = []
+
+                            # Progress every 10 chunks
+                            if chunk_count % 10 == 0:
+                                rate = stats['papers_parsed'] / elapsed if elapsed > 0 else 0
+                                print(f"\n📊 Progress: {chunk_count} chunks | {stats['papers_parsed']:,} papers | {stats['rows_written']:,} rows | {rate:.0f} papers/sec")
+
+                    # Clear element to free memory
+                    element.clear()
+
+                except Exception as e:
+                    print(f"⚠️  Error processing element: {e}")
+                    continue
+
+        except Exception as e:
+            print(f"❌ Fatal parsing error: {e}")
+            raise
+
+        # Process any remaining papers in last chunk
+        if chunk_papers:
+            chunk_count += 1
+            print(f"\n📦 Processing final chunk #{chunk_count} ({len(chunk_papers):,} papers)...")
+            chunk_stats = self.author_matcher.process_paper_batch(chunk_papers)
+            stats['papers_parsed'] += chunk_stats['queried']
+            stats['rows_written'] += chunk_stats['written']
+            print(f"   ✓ Queried: {chunk_stats['queried']:,}, Written: {chunk_stats['written']:,} rows")
+
+        total_time = time.time() - start_time
 
         # Final summary
-        print(f"\n🎉 Pipeline complete!")
+        print(f"\n🎉 Processing complete!")
+        print(f"   Total chunks: {chunk_count}")
         print(f"   Papers parsed: {stats['papers_parsed']:,}")
-        print(f"   Papers consumed: {stats['papers_consumed']:,}")
-        print(f"   Papers queried: {stats['papers_queried']:,}")
         print(f"   Author rows written: {stats['rows_written']:,}")
+        print(f"   Total time: {total_time:.1f}s ({total_time/60:.1f} minutes)")
 
         return stats
+
+    def _extract_paper_data(self, element: etree.Element) -> Dict[str, Any]:
+        """Extract paper data from XML element."""
+        from .xml_parser import XMLStreamingParser
+
+        paper_id = element.get('key')
+
+        # Extract authors
+        authors = [
+            author.text
+            for author in element.findall('author')
+            if author.text
+        ]
+
+        # Extract title and year
+        title_elem = element.find('title')
+        title = title_elem.text if title_elem is not None else None
+
+        year_elem = element.find('year')
+        year = year_elem.text if year_elem is not None else None
+
+        # Extract venue (journal/conference name)
+        venue_elem = element.find('venue')
+        venue = venue_elem.text if venue_elem is not None else None
+
+        # Extract DOI
+        doi_elem = element.find('doi')
+        doi = doi_elem.text if doi_elem is not None else None
+
+        # Extract electronic edition (EE) URL
+        ee_elem = element.find('ee')
+        ee = ee_elem.text if ee_elem is not None else None
+
+        # Extract volume
+        volume_elem = element.find('volume')
+        volume = volume_elem.text if volume_elem is not None else None
+
+        # Extract number
+        number_elem = element.find('number')
+        number = number_elem.text if number_elem is not None else None
+
+        # Extract pages
+        pages_elem = element.find('pages')
+        pages = pages_elem.text if pages_elem is not None else None
+
+        # Extract publisher
+        publisher_elem = element.find('publisher')
+        publisher = publisher_elem.text if publisher_elem is not None else None
+
+        return {
+            'paper_id': paper_id,
+            'authors': authors,
+            'title': title,
+            'year': year,
+            'venue': venue,
+            'doi': doi,
+            'ee': ee,
+            'volume': volume,
+            'number': number,
+            'pages': pages,
+            'publisher': publisher
+        }
 
 
 # =============================================================================
