@@ -62,9 +62,13 @@ class XMLStreamingParser:
         year_elem = element.find('year')
         year = year_elem.text if year_elem is not None else None
 
-        # Extract venue (journal/conference name)
-        venue_elem = element.find('venue')
-        venue = venue_elem.text if venue_elem is not None else None
+        # Extract venue/journal (DBLP uses <journal> not <venue>)
+        # For articles and inproceedings: <journal>
+        # For books: <booktitle>
+        venue_elem = element.find('journal')
+        if venue_elem is None or not venue_elem.text:
+            venue_elem = element.find('booktitle')
+        venue = venue_elem.text if venue_elem is not None and venue_elem.text else None
 
         # Extract DOI
         doi_elem = element.find('doi')
