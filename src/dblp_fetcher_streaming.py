@@ -18,7 +18,7 @@ import pandas as pd
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from src.streaming import (
+from streaming import (
     ThreadSafeAuthorCache,
     ThreadSafeCheckpointManager,
     QueueMonitor,

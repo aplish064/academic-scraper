@@ -5,8 +5,8 @@ from typing import Dict, Set, Any, Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pandas as pd
-from src.streaming.author_cache import ThreadSafeAuthorCache
-from src.streaming.checkpoint_manager import ThreadSafeCheckpointManager
+from .author_cache import ThreadSafeAuthorCache
+from .checkpoint_manager import ThreadSafeCheckpointManager
 
 
 class StreamingAuthorMatcher:
