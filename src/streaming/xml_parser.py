@@ -62,21 +62,41 @@ class XMLStreamingParser:
         year_elem = element.find('year')
         year = year_elem.text if year_elem is not None else None
 
-        # Extract venue/journal (DBLP uses <journal> not <venue>)
-        # For articles and inproceedings: <journal>
-        # For books: <booktitle>
-        venue_elem = element.find('journal')
-        if venue_elem is None or not venue_elem.text:
+        # Extract venue/journal based on element type
+        # DBLP uses different fields for different publication types
+        venue = None
+        if element.tag == 'article':
+            # Articles use <journal>
+            venue_elem = element.find('journal')
+            venue = venue_elem.text if venue_elem is not None and venue_elem.text else None
+        elif element.tag in ['inproceedings', 'incollection', 'proceedings', 'book']:
+            # Conferences and collections use <booktitle>
             venue_elem = element.find('booktitle')
-        venue = venue_elem.text if venue_elem is not None and venue_elem.text else None
+            venue = venue_elem.text if venue_elem is not None and venue_elem.text else None
 
-        # Extract DOI
-        doi_elem = element.find('doi')
-        doi = doi_elem.text if doi_elem is not None else None
-
-        # Extract electronic edition (EE) URL
+        # Extract DOI from <ee> tag (not <doi>)
+        doi = None
         ee_elem = element.find('ee')
-        ee = ee_elem.text if ee_elem is not None else None
+        if ee_elem is not None and ee_elem.text:
+            ee_text = ee_elem.text
+            # Extract DOI from URLs like "https://doi.org/10.1007/..."
+            if 'doi.org/' in ee_text:
+                # Extract DOI from URL
+                import re
+                doi_match = re.search(r'doi\.org/([0-9.]+/[0-9]+)', ee_text)
+                if doi_match:
+                    doi = doi_match.group(1)
+            elif ee_text.startswith('http') and '/' in ee_text:
+                # Use last part of URL as DOI fallback
+                parts = ee_text.rstrip('/').split('/')
+                if parts:
+                    last_part = parts[-1]
+                    # Check if it looks like a DOI (contains numbers)
+                    if re.search(r'\d+', last_part):
+                        doi = last_part
+
+        # Extract electronic edition (EE) URL (full URL)
+        ee = ee_elem.text if ee_elem is not None and ee_elem is not None else None
 
         # Extract volume
         volume_elem = element.find('volume')
@@ -99,8 +119,8 @@ class XMLStreamingParser:
             'authors': authors,
             'title': title,
             'year': year,
-            'venue': venue,
-            'doi': doi,
+            'venue': venue,  # Extracted from journal or booktitle based on element type
+            'doi': doi,  # Extracted from ee tag URLs
             'ee': ee,
             'volume': volume,
             'number': number,
