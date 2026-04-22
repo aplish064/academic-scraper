@@ -137,6 +137,36 @@ def query_total_unique_journals():
         return 0
 
 
+def query_total_unique_papers():
+    """查询三个表的总唯一论文数（DOI去重）"""
+    try:
+        client = get_ch_client()
+        if not client:
+            return 0
+
+        # 使用UNION ALL获取三个表的所有DOI，然后去重
+        paper_sql = """
+        SELECT uniqExact(doi) as count
+        FROM (
+            SELECT doi FROM OpenAlex WHERE doi != ''
+            UNION ALL
+            SELECT doi FROM semantic WHERE doi != ''
+            UNION ALL
+            SELECT doi FROM dblp WHERE doi != ''
+        )
+        WHERE doi != ''
+        SETTINGS max_execution_time=120
+        """
+
+        result = client.query(paper_sql)
+        if result and result.result_rows:
+            return result.result_rows[0][0]
+        return 0
+    except Exception as e:
+        print(f"⚠️  查询总论文数失败: {e}")
+        return 0
+
+
 def try_merge_from_cache():
     """尝试从openalex和semantic缓存合并数据"""
     if not USE_CACHE or not redis_client:
@@ -353,20 +383,7 @@ def get_aggregated_data():
                 uniqHLL12(doi) FILTER (WHERE citation_count >= 50) as high_citations,
                 round(avgIf(fwci, fwci > 0), 2) as avg_fwci
             FROM {table_name}
-            SETTINGS max_threads=8, max_execution_time=120
-            """
-        elif source == 'dblp':
-            # DBLP字段不同，使用对应的字段名
-            stats_sql = f"""
-            SELECT
-                uniqHLL12(doi) as total_papers,
-                uniqHLL12(author_pid) as unique_authors,
-                uniqHLL12(venue) as unique_journals,
-                0 as unique_institutions,
-                0 as high_citations,
-                0 as avg_fwci
-            FROM {table_name}
-            SETTINGS max_threads=4, max_execution_time=60
+            SETTINGS max_threads=4, max_execution_time=30
             """
         else:
             # Semantic字段较少，使用简化统计
@@ -379,7 +396,7 @@ def get_aggregated_data():
                 uniqHLL12(doi) FILTER (WHERE citation_count >= 50) as high_citations,
                 0 as avg_fwci
             FROM {table_name}
-            SETTINGS max_threads=4, max_execution_time=60
+            SETTINGS max_threads=1, max_execution_time=30
             """
 
         stats_result = query_clickhouse(stats_sql)
@@ -408,7 +425,7 @@ def get_aggregated_data():
         WHERE publication_date != '' AND length(publication_date) > 0
         GROUP BY formatDateTime(toDateOrNull(publication_date), '%Y-%m')
         ORDER BY date DESC
-        SETTINGS max_threads=4, max_execution_time=120
+        SETTINGS max_threads=1
         """
 
         date_result = query_clickhouse(date_sql)
@@ -421,63 +438,44 @@ def get_aggregated_data():
         # 3. 引用数分布 - 使用DOI去重
         step_start = time.time()
         print(f"[步骤 3/8] 引用数分布查询...")
-        if source == 'dblp':
-            # DBLP没有citation_count字段，跳过引用数分布
-            result['citations_distribution'] = {}
-            print(f"  ⊘ 跳过 (DBLP无此字段)")
-            step_time = time.time() - step_start
-        else:
-            # OpenAlex和Semantic有citation_count字段
-            citation_sql = f"""
-            SELECT
-                multiIf(
-                    citation_count = 0, '0',
-                    citation_count < 6, '1-5',
-                    citation_count < 11, '6-10',
-                    citation_count < 21, '11-20',
-                    citation_count < 51, '21-50',
-                    citation_count < 101, '51-100',
-                    citation_count < 501, '101-500',
-                    '500+'
-                ) as range,
-                uniqHLL12(doi) as count
-            FROM {table_name}
-            GROUP BY range
-            ORDER BY range
-            SETTINGS max_threads=4, max_execution_time=60
-            """
+        citation_sql = f"""
+        SELECT
+            multiIf(
+                citation_count = 0, '0',
+                citation_count < 6, '1-5',
+                citation_count < 11, '6-10',
+                citation_count < 21, '11-20',
+                citation_count < 51, '21-50',
+                citation_count < 101, '51-100',
+                citation_count < 501, '101-500',
+                '500+'
+            ) as range,
+            uniqHLL12(doi) as count
+        FROM {table_name}
+        GROUP BY range
+        ORDER BY range
+        SETTINGS max_threads=4, max_execution_time=60
+        """
 
-            citation_result = query_clickhouse(citation_sql)
-            if citation_result:
-                for row in citation_result.result_rows:
-                    result['citations_distribution'][row[0]] = int(row[1])
-            step_time = time.time() - step_start
-            print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
+        citation_result = query_clickhouse(citation_sql)
+        if citation_result:
+            for row in citation_result.result_rows:
+                result['citations_distribution'][row[0]] = int(row[1])
+        step_time = time.time() - step_start
+        print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
 
-        # 4. 作者类型分布（基于tag字段或CCF等级）
+        # 4. 作者类型分布（基于tag字段）
         step_start = time.time()
         print(f"[步骤 4/8] 作者类型分布查询...")
-
-        # 根据数据源使用不同的字段名
-        if source == 'dblp':
-            # DBLP使用ccf_class字段
-            author_type_field = 'ccf_class'
-            where_clause = "WHERE ccf_class != '' AND ccf_class != 'nan'"
-        else:
-            # OpenAlex和Semantic使用tag字段
-            author_type_field = 'tag'
-            where_clause = "WHERE tag != ''"
-
         author_sql = f"""
         SELECT
-            {author_type_field},
+            tag,
             count() as count
         FROM {table_name}
-        {where_clause}
-        GROUP BY {author_type_field}
+        WHERE tag != ''
+        GROUP BY tag
         ORDER BY count DESC
         LIMIT 10
-        SETTINGS max_threads=4, max_execution_time=60
         """
 
         author_result = query_clickhouse(author_sql)
@@ -488,27 +486,18 @@ def get_aggregated_data():
         print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
 
 
-        # 5. Top期刊/会议 - 使用DOI去重
+        # 5. Top期刊 - 使用DOI去重
         step_start = time.time()
         print(f"[步骤 5/8] Top期刊查询...")
-
-        # 根据数据源使用不同的字段名
-        if source == 'dblp':
-            # DBLP使用venue字段
-            journal_field = 'venue'
-        else:
-            # OpenAlex和Semantic使用journal字段
-            journal_field = 'journal'
-
         journal_sql = f"""
         SELECT
-            {journal_field},
+            journal,
             uniqHLL12(doi) as count
         FROM {table_name}
-        WHERE {journal_field} != ''
-            AND length({journal_field}) > 3
-            AND lower({journal_field}) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
-        GROUP BY {journal_field}
+        WHERE journal != ''
+            AND length(journal) > 3
+            AND lower(journal) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
+        GROUP BY journal
         ORDER BY count DESC
         LIMIT 50
         SETTINGS max_threads=8, max_execution_time=60
@@ -685,7 +674,7 @@ def get_all_sources_data():
                     sum(fwci) as fwci_sum,
                     countIf(fwci > 0) as fwci_count
                 FROM {table}
-                SETTINGS max_threads=8, max_execution_time=120
+                SETTINGS max_threads=4
                 """
             else:
                 stats_sql = f"""
@@ -1008,7 +997,7 @@ def preload_all_caches():
         print("⚠️  缓存未启用，跳过预加载")
         return
 
-    sources = ['openalex', 'semantic', 'dblp', 'all']
+    sources = ['openalex', 'semantic', 'all']
 
     for source in sources:
         print(f"  📦 预加载 {source} 数据源...")
@@ -1067,427 +1056,6 @@ def cache_refresh_worker():
             print(f"❌ 缓存刷新失败: {e}")
             import traceback
             traceback.print_exc()
-
-# ===== 作者合作关系图谱API =====
-
-def get_merged_papers_sql(time_range="all", journal_keyword=None):
-    """生成合并OpenAlex和Semantic数据的SQL - 只选择共同字段"""
-    time_filter = ""
-    if time_range != "all":
-        years = int(time_range)
-        # Use toDateOrNull to handle malformed dates, filter out NULL values
-        time_filter = f"AND toYear(toDateOrNull(publication_date)) >= year(toDate(today())) - {years} AND toDateOrNull(publication_date) IS NOT NULL"
-
-    # Add journal filter for domain-based filtering
-    journal_filter = ""
-    if journal_keyword and journal_keyword.strip():
-        # Use LIKE for journal keyword matching (case-insensitive)
-        journal_filter = f"AND lower(journal) LIKE lower('%{journal_keyword.strip()}%')"
-
-    # 只选择两个表都有的字段
-    common_fields = [
-        'doi', 'rank', 'author_id', 'author', 'uid', 'title', 'journal',
-        'citation_count', 'tag', 'state', 'institution_id', 'institution_name',
-        'institution_country', 'institution_type', 'publication_date'
-    ]
-
-    fields_str = ', '.join(common_fields)
-
-    # Always filter out malformed dates
-    base_date_filter = "AND length(publication_date) >= 4"
-
-    # Add LIMIT to reduce dataset size for filtered queries
-    limit_clause = ""
-    if time_range != "all" or journal_keyword:
-        # Limit to 500K records for filtered queries to ensure performance
-        limit_clause = "LIMIT 500000"
-
-    return f"""
-    WITH combined AS (
-        SELECT
-            doi,
-            rank,
-            argMax(author_id, source_order) as author_id,
-            argMax(author, source_order) as author,
-            argMax(uid, source_order) as uid,
-            argMax(title, source_order) as title,
-            argMax(journal, source_order) as journal,
-            argMax(citation_count, source_order) as citation_count,
-            argMax(tag, source_order) as tag,
-            argMax(state, source_order) as state,
-            argMax(institution_id, source_order) as institution_id,
-            argMax(institution_name, source_order) as institution_name,
-            argMax(institution_country, source_order) as institution_country,
-            argMax(institution_type, source_order) as institution_type,
-            argMax(publication_date, source_order) as publication_date
-        FROM (
-            SELECT {fields_str}, 1 as source_order FROM OpenAlex PREWHERE doi != '' {base_date_filter} {time_filter} {journal_filter}
-            UNION ALL
-            SELECT {fields_str}, 2 as source_order FROM semantic PREWHERE doi != '' {base_date_filter} {time_filter} {journal_filter}
-        )
-        GROUP BY doi, rank
-        {limit_clause}
-    )
-    SELECT * FROM combined
-    """
-
-def get_graph_cache_key(prefix, **params):
-    """生成图谱缓存键"""
-    import hashlib
-    params_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-    params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
-    return f"graph:{prefix}:{params_hash}"
-
-@app.route('/api/graph/authors', methods=['GET'])
-def get_graph_authors():
-    """获取作者节点数据"""
-    print("📊 查询作者合作关系图谱...")
-    try:
-        # 获取查询参数
-        try:
-            min_collaborations = int(request.args.get('min_collaborations', 1))
-        except ValueError:
-            return jsonify({
-                "error": True,
-                "message": "min_collaborations must be an integer",
-                "code": "INVALID_PARAMETER"
-            }), 400
-
-        try:
-            max_nodes = min(int(request.args.get('max_nodes', 200)), 500)  # 最大500
-        except ValueError:
-            return jsonify({
-                "error": True,
-                "message": "max_nodes must be an integer",
-                "code": "INVALID_PARAMETER"
-            }), 400
-
-        time_range = request.args.get('time_range', '1')  # Default to last 1 year
-        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
-
-        # 参数验证
-        allowed_time_ranges = ["all", "1", "2", "3"]
-        if time_range not in allowed_time_ranges:
-            return jsonify({
-                "error": True,
-                "message": f"time_range must be one of {allowed_time_ranges}",
-                "code": "INVALID_PARAMETER"
-            }), 400
-
-        if min_collaborations < 1 or min_collaborations > 50:
-            return jsonify({
-                "error": True,
-                "message": "最小合作次数必须在1-50之间",
-                "code": "INVALID_PARAMETER"
-            }), 400
-
-        # 检查缓存
-        cache_key = get_graph_cache_key('authors', min_collab=min_collaborations, max_nodes=max_nodes, time_range=time_range, journal=journal_keyword)
-        cached = get_from_cache(cache_key)
-        if cached:
-            return jsonify(cached)
-
-        # 查询数据
-        client = get_ch_client()
-        if not client:
-            return jsonify({
-                "error": True,
-                "message": "数据库连接失败",
-                "code": "DB_CONNECTION_ERROR"
-            }), 503
-
-        # 获取合并后的论文数据，并计算合作关系
-        sql = f"""
-        WITH combined_papers AS (
-            {get_merged_papers_sql(time_range, journal_keyword)}
-        ),
-        author_collaborations AS (
-            SELECT
-                p1.author_id as author_id,
-                p1.author as author_name,
-                p1.institution_name as institution,
-                p1.institution_country as country,
-                count(DISTINCT p2.author_id) as degree,
-                count(DISTINCT p1.doi) as paper_count,
-                sum(p1.citation_count) as citation_count
-            FROM combined_papers p1
-            INNER JOIN combined_papers p2
-                ON p1.doi = p2.doi
-                AND p1.rank < p2.rank
-            GROUP BY author_id, author_name, institution, country
-            HAVING degree >= {min_collaborations}
-            ORDER BY degree DESC
-            LIMIT {max_nodes}
-        )
-        SELECT * FROM author_collaborations
-        """
-
-        result = client.query(sql)
-        if not result or not result.result_rows:
-            return jsonify({
-                "error": True,
-                "message": "未找到符合条件的数据",
-                "code": "NO_DATA",
-                "suggestions": ["降低最小合作次数", "扩大时间范围"]
-            }), 404
-
-        # 构建响应
-        nodes = []
-        for row in result.result_rows:
-            nodes.append({
-                "id": row[0],
-                "label": row[1],
-                "degree": row[4],
-                "paper_count": row[5],
-                "citation_count": row[6],
-                "institution": row[2] or "未知机构",
-                "country": row[3] or "未知"
-            })
-
-        # 获取总数
-        total_sql = f"""
-        WITH combined_papers AS (
-            {get_merged_papers_sql(time_range)}
-        )
-        SELECT count(DISTINCT author_id) FROM combined_papers
-        """
-        total_result = client.query(total_sql)
-        total_authors = total_result.result_rows[0][0] if total_result.result_rows else 0
-
-        response = {
-            "nodes": nodes,
-            "total_authors": total_authors,
-            "filtered_authors": len(nodes)
-        }
-
-        # 缓存结果
-        set_to_cache(cache_key, response, ttl=600)
-
-        return jsonify(response)
-
-    except Exception as e:
-        print(f"❌ 获取作者数据失败: {e}")
-        return jsonify({
-            "error": True,
-            "message": f"查询失败: {str(e)}",
-            "code": "QUERY_ERROR"
-        }), 500
-
-
-@app.route('/api/graph/edges', methods=['GET'])
-def get_graph_edges():
-    """获取合作关系数据"""
-    print("📊 查询作者合作关系边数据...")
-    try:
-        # 获取查询参数
-        author_ids = request.args.getlist('author_ids')
-
-        try:
-            min_weight = int(request.args.get('min_weight', 1))
-        except ValueError:
-            return jsonify({
-                "error": True,
-                "message": "min_weight must be an integer",
-                "code": "INVALID_PARAMETER"
-            }), 400
-
-        time_range = request.args.get('time_range', '1')  # Default to last 1 year
-        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
-
-        # 参数验证
-        allowed_time_ranges = ["all", "1", "2", "3"]
-        if time_range not in allowed_time_ranges:
-            return jsonify({
-                "error": True,
-                "message": f"time_range must be one of {allowed_time_ranges}",
-                "code": "INVALID_PARAMETER"
-            }), 400
-
-        if not author_ids:
-            return jsonify({
-                "error": True,
-                "message": "缺少author_ids参数",
-                "code": "MISSING_PARAMETER"
-            }), 400
-
-        # SQL注入防护：验证author_ids不包含恶意字符
-        for aid in author_ids:
-            if "'" in aid or ";" in aid or "\\" in aid:
-                return jsonify({
-                    "error": True,
-                    "message": "Invalid author_id format",
-                    "code": "INVALID_PARAMETER"
-                }), 400
-
-        # 检查缓存
-        cache_key = get_graph_cache_key('edges', ids=",".join(sorted(author_ids)), min_weight=min_weight, time_range=time_range, journal=journal_keyword)
-        cached = get_from_cache(cache_key)
-        if cached:
-            return jsonify(cached)
-
-        client = get_ch_client()
-        if not client:
-            return jsonify({
-                "error": True,
-                "message": "数据库连接失败",
-                "code": "DB_CONNECTION_ERROR"
-            }), 503
-
-        # 构建作者ID列表（用于SQL IN查询）- 已经过验证，安全
-        author_ids_str = "', '".join(author_ids)
-
-        # 查询合作关系
-        sql = f"""
-        WITH combined_papers AS (
-            {get_merged_papers_sql(time_range, journal_keyword)}
-        ),
-        collaborations AS (
-            SELECT
-                p1.author_id as source_id,
-                p1.author as source_name,
-                p2.author_id as target_id,
-                p2.author as target_name,
-                count(*) as weight
-            FROM combined_papers p1
-            INNER JOIN combined_papers p2
-                ON p1.doi = p2.doi
-                AND p1.rank < p2.rank
-            WHERE p1.author_id IN ('{author_ids_str}')
-                AND p2.author_id IN ('{author_ids_str}')
-                AND p1.author_id != p2.author_id
-            GROUP BY source_id, source_name, target_id, target_name
-            HAVING weight >= {min_weight}
-        )
-        SELECT * FROM collaborations
-        """
-
-        result = client.query(sql)
-
-        edges = []
-        for row in result.result_rows:
-            edges.append({
-                "source": row[0],
-                "target": row[2],
-                "weight": row[4]
-            })
-
-        response = {
-            "edges": edges,
-            "total_collaborations": len(edges)
-        }
-
-        # 缓存结果
-        set_to_cache(cache_key, response, ttl=600)
-
-        return jsonify(response)
-
-    except Exception as e:
-        print(f"❌ 获取合作关系失败: {e}")
-        return jsonify({
-            "error": True,
-            "message": f"查询失败: {str(e)}",
-            "code": "QUERY_ERROR"
-        }), 500
-
-
-@app.route('/api/graph/stats', methods=['GET'])
-def get_graph_stats():
-    """获取图谱统计信息"""
-    print("📊 查询图谱统计信息...")
-    try:
-        # 获取时间范围参数，默认为1年
-        time_range = request.args.get('time_range', '1')  # Default to last 1 year
-        journal_keyword = request.args.get('journal', '')  # Journal/domain filter
-
-        # 参数验证
-        allowed_time_ranges = ["all", "1", "2", "3"]
-        if time_range not in allowed_time_ranges:
-            return jsonify({
-                "error": True,
-                "message": f"time_range must be one of {allowed_time_ranges}",
-                "code": "INVALID_PARAMETER"
-            }), 400
-
-        cache_key = get_graph_cache_key('stats', time_range=time_range, journal=journal_keyword)
-        cached = get_from_cache(cache_key)
-        if cached:
-            return jsonify(cached)
-
-        client = get_ch_client()
-        if not client:
-            return jsonify({
-                "error": True,
-                "message": "数据库连接失败",
-                "code": "DB_CONNECTION_ERROR"
-            }), 503
-
-        # 查询统计数据
-        stats_sql = f"""
-        WITH combined_papers AS (
-            {get_merged_papers_sql(time_range, journal_keyword)}
-        ),
-        paper_stats AS (
-            SELECT count(DISTINCT doi) as total_papers FROM combined_papers
-        ),
-        author_stats AS (
-            SELECT count(DISTINCT author_id) as total_authors FROM combined_papers
-        ),
-        collab_stats AS (
-            SELECT
-                count(*) as total_collaborations,
-                avg(degree) as avg_degree,
-                max(degree) as max_degree
-            FROM (
-                SELECT
-                    p1.author_id,
-                    count(DISTINCT p2.author_id) as degree
-                FROM combined_papers p1
-                INNER JOIN combined_papers p2
-                    ON p1.doi = p2.doi
-                    AND p1.rank < p2.rank
-                GROUP BY p1.author_id
-            )
-        )
-        SELECT
-            ps.total_papers,
-            aus.total_authors,
-            cs.total_collaborations,
-            cs.avg_degree,
-            cs.max_degree
-        FROM paper_stats ps, author_stats aus, collab_stats cs
-        """
-
-        result = client.query(stats_sql)
-        if result and result.result_rows:
-            row = result.result_rows[0]
-            response = {
-                "total_papers": row[0],
-                "total_authors": row[1],
-                "total_collaborations": row[2],
-                "avg_collaboration_degree": round(row[3], 1) if row[3] else 0,
-                "max_collaboration_degree": row[4] or 0
-            }
-
-            # 缓存1小时
-            set_to_cache(cache_key, response, ttl=3600)
-
-            return jsonify(response)
-        else:
-            return jsonify({
-                "total_papers": 0,
-                "total_authors": 0,
-                "total_collaborations": 0,
-                "avg_collaboration_degree": 0,
-                "max_collaboration_degree": 0
-            })
-
-    except Exception as e:
-        print(f"❌ 获取统计数据失败: {e}")
-        return jsonify({
-            "error": True,
-            "message": f"查询失败: {str(e)}",
-            "code": "QUERY_ERROR"
-        }), 500
 
 
 if __name__ == '__main__':
