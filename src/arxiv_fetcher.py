@@ -507,3 +507,111 @@ def create_arxiv_table(client):
     except Exception as e:
         log_message(f"创建表失败: {e}", "ERROR")
         raise
+
+# =============================================================================
+# 批量插入函数
+# =============================================================================
+
+def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
+    """批量插入数据到 ClickHouse（使用临时表去重）
+
+    Args:
+        client: ClickHouse 客户端
+        rows: 数据行列表
+
+    Returns:
+        是否成功
+    """
+    if not rows:
+        return True
+
+    # 生成唯一的临时表名以避免并发冲突
+    import uuid
+    temp_table = f'temp_arxiv_insert_dedup_{uuid.uuid4().hex[:8]}'
+
+    try:
+        import pandas as pd
+
+        # 清洗数据
+        cleaned_rows = []
+        current_import_date = datetime.now().date()
+
+        for row in rows:
+            cleaned_row = {}
+
+            # 处理每个字段
+            cleaned_row['arxiv_id'] = str(row.get('arxiv_id', ''))
+            cleaned_row['uid'] = str(row.get('uid', ''))
+            cleaned_row['title'] = str(row.get('title', ''))
+
+            # 验证并处理日期字段
+            published = row.get('published')
+            if isinstance(published, str):
+                try:
+                    published = datetime.strptime(published, '%Y-%m-%d').date()
+                except ValueError:
+                    published = current_import_date
+            elif published is None:
+                published = current_import_date
+            cleaned_row['published'] = published
+
+            # 验证并处理更新时间
+            updated = row.get('updated')
+            if isinstance(updated, str):
+                try:
+                    updated = datetime.strptime(updated, '%Y-%m-%dT%H:%M:%SZ')
+                except ValueError:
+                    updated = datetime.now()
+            elif updated is None:
+                updated = datetime.now()
+            cleaned_row['updated'] = updated
+
+            # 验证 categories 字段类型
+            categories = row.get('categories', [])
+            cleaned_row['categories'] = categories if isinstance(categories, list) else []
+
+            cleaned_row['primary_category'] = str(row.get('primary_category', ''))
+            cleaned_row['journal_ref'] = str(row.get('journal_ref', ''))
+            cleaned_row['comment'] = str(row.get('comment', ''))
+            cleaned_row['url'] = str(row.get('url', ''))
+            cleaned_row['pdf_url'] = str(row.get('pdf_url', ''))
+            cleaned_row['author'] = str(row.get('author', ''))
+            cleaned_row['rank'] = int(row.get('rank', 0)) if row.get('rank') else 0
+            cleaned_row['tag'] = str(row.get('tag', ''))
+            cleaned_row['affiliation'] = str(row.get('affiliation', ''))
+            cleaned_row['import_date'] = current_import_date
+
+            cleaned_rows.append(cleaned_row)
+
+        # 创建 DataFrame
+        df = pd.DataFrame(cleaned_rows)
+
+        # 删除可能存在的临时表
+        client.command(f'DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}')
+
+        # 创建临时表
+        client.command(f'''
+            CREATE TABLE {CH_DATABASE}.{temp_table} AS {CH_DATABASE}.{CH_TABLE}
+            ENGINE = Memory
+        ''')
+
+        # 插入到临时表
+        client.insert_df(f'{CH_DATABASE}.{temp_table}', df)
+
+        # 从临时表插入到目标表，使用 DISTINCT 去重
+        client.command(f'''
+            INSERT INTO {CH_DATABASE}.{CH_TABLE}
+            SELECT DISTINCT * FROM {CH_DATABASE}.{temp_table}
+        ''')
+
+        return True
+
+    except Exception as e:
+        log_message(f"批量插入失败: {e}", "ERROR")
+        return False
+    finally:
+        # 确保临时表被删除，避免资源泄漏
+        try:
+            client.command(f'DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}')
+        except Exception:
+            pass  # 忽略清理时的错误
