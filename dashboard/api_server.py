@@ -405,6 +405,49 @@ def query_arxiv_papers_by_month():
         return {}
 
 
+def get_aggregated_data_arxiv():
+    """获取arxiv聚合数据"""
+    # 尝试从缓存获取
+    cache_key = get_cache_key('arxiv')
+    cached_data = get_from_cache(cache_key)
+    if cached_data:
+        print(f"🎯 命中arxiv缓存!")
+        return cached_data
+
+    print(f"🔄 查询arxiv数据库...")
+
+    # 查询数据库
+    try:
+        aggregated_data = {
+            'category_distribution': query_arxiv_category_distribution(),
+            'papers_by_date': query_arxiv_papers_by_month(),
+            'statistics': query_arxiv_statistics(),
+            'source': 'arxiv',
+            'table': 'arxiv'
+        }
+
+        # 写入缓存
+        set_to_cache(cache_key, aggregated_data, ttl=120)
+
+        return aggregated_data
+    except Exception as e:
+        print(f"❌ 聚合arxiv数据失败: {e}")
+        return {
+            'category_distribution': {},
+            'papers_by_date': {},
+            'statistics': {
+                'total_papers': 0,
+                'unique_authors': 0,
+                'unique_categories': 0,
+                'earliest_date': 'N/A',
+                'latest_date': 'N/A',
+                'error': str(e)
+            },
+            'source': 'arxiv',
+            'table': 'arxiv'
+        }
+
+
 def try_merge_from_cache():
     """尝试从openalex、semantic和dblp缓存合并数据"""
     if not USE_CACHE or not redis_client:
