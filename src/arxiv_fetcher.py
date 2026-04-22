@@ -442,3 +442,68 @@ def get_all_dates_backward(start_date: str, end_year: int) -> List[str]:
         current -= timedelta(days=1)
 
     return dates
+
+# =============================================================================
+# ClickHouse 客户端
+# =============================================================================
+
+def create_clickhouse_client():
+    """创建 ClickHouse 客户端"""
+    try:
+        client = clickhouse_connect.get_client(
+            host=CH_HOST,
+            port=CH_PORT,
+            username=CH_USERNAME,
+            password=CH_PASSWORD,
+            database=CH_DATABASE
+        )
+
+        # 测试连接
+        client.command('SELECT 1')
+
+        log_message("✅ ClickHouse 连接成功")
+        return client
+
+    except Exception as e:
+        log_message(f"❌ ClickHouse 连接失败: {e}", "ERROR")
+        return None
+
+
+def create_arxiv_table(client):
+    """创建 arXiv 表（如果不存在）"""
+    try:
+        # 检查表是否存在
+        tables = client.query(f"EXISTS TABLE {CH_DATABASE}.{CH_TABLE}").first_row
+
+        if tables == 0:
+            # 创建表
+            create_table_sql = f"""
+            CREATE TABLE {CH_DATABASE}.{CH_TABLE} (
+                arxiv_id String,
+                uid String,
+                title String,
+                published Date,
+                updated DateTime,
+                categories Array(String),
+                primary_category String,
+                journal_ref String,
+                comment String,
+                url String,
+                pdf_url String,
+                author String,
+                rank UInt8,
+                tag String,
+                affiliation String,
+                import_date Date
+            ) ENGINE = MergeTree()
+            ORDER BY (arxiv_id, rank)
+            """
+
+            client.command(create_table_sql)
+            log_message(f"✅ 创建表 {CH_DATABASE}.{CH_TABLE}")
+        else:
+            log_message(f"ℹ️  表 {CH_DATABASE}.{CH_TABLE} 已存在")
+
+    except Exception as e:
+        log_message(f"创建表失败: {e}", "ERROR")
+        raise
