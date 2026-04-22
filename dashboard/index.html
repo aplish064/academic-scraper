@@ -1029,9 +1029,13 @@
 
                 // 创建图表（根据数据源选择性创建）
                 const chartsToCreate = [
-                    createPapersTrendChartFromAggregated(data.papers_by_date, data.source),
-                    createJournalDistChartFromAggregated(data.top_journals)
+                    createPapersTrendChartFromAggregated(data.papers_by_date, data.source)
                 ];
+
+                // 只为有top_journals字段的数据源创建期刊分布图（OpenAlex、Semantic）
+                if (data.top_journals && Object.keys(data.top_journals).length > 0) {
+                    chartsToCreate.push(createJournalDistChartFromAggregated(data.top_journals));
+                }
 
                 // 只为有引用数据的数据源创建引用分布图（OpenAlex、Semantic，排除DBLP）
                 if ((data.source === 'openalex' || data.source === 'semantic' || data.source === 'all') && Object.keys(data.citations_distribution || {}).length > 0) {
