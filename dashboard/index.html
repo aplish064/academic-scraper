@@ -853,8 +853,9 @@
                 animateNumber(document.getElementById('highCitations'), stats.high_citations);
 
                 // 根据数据源显示/隐藏高被引统计卡片
-                const highCitationsCard = document.getElementById('highCitationsCard').parentElement;
-                if (highCitationsCard) {
+                const highCitationsElement = document.getElementById('highCitations');
+                if (highCitationsElement && highCitationsElement.parentElement) {
+                    const highCitationsCard = highCitationsElement.parentElement;
                     if (data.source === 'dblp') {
                         highCitationsCard.style.display = 'none';  // DBLP没有引用数据
                     } else {
