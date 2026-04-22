@@ -344,7 +344,7 @@ def paper_to_rows(paper: Dict[str, Any]) -> List[Dict[str, Any]]:
     if published_str:
         try:
             published = datetime.strptime(published_str, '%Y-%m-%dT%H:%M:%SZ').date()
-        except:
+        except ValueError:
             pass
 
     # 解析更新时间
@@ -353,10 +353,10 @@ def paper_to_rows(paper: Dict[str, Any]) -> List[Dict[str, Any]]:
     if updated_str:
         try:
             updated = datetime.strptime(updated_str, '%Y-%m-%dT%H:%M:%SZ')
-        except:
+        except ValueError:
             pass
 
-    categories = paper.get('categories', [])
+    categories = paper.get('categories') or []
     primary_category = paper.get('primary_category', '')
     journal_ref = paper.get('journal_ref', '')
     comment = paper.get('comment', '')
@@ -387,6 +387,9 @@ def paper_to_rows(paper: Dict[str, Any]) -> List[Dict[str, Any]]:
     else:
         total_authors = len(authors)
         for rank, author in enumerate(authors, 1):
+            # Skip invalid author entries
+            if author is None or not isinstance(author, dict):
+                continue
             # 确定标签
             if rank == 1:
                 tag = '第一作者'
@@ -414,3 +417,28 @@ def paper_to_rows(paper: Dict[str, Any]) -> List[Dict[str, Any]]:
             })
 
     return rows
+
+# =============================================================================
+# 日期生成器
+# =============================================================================
+
+def get_all_dates_backward(start_date: str, end_year: int) -> List[str]:
+    """生成从 start_date 往前到 end_year 的所有日期
+
+    Args:
+        start_date: 开始日期 (YYYY-MM-DD)
+        end_year: 结束年份
+
+    Returns:
+        日期列表 (YYYY-MM-DD 格式)
+    """
+    dates = []
+    start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+    end_date_obj = datetime(end_year, 1, 1)
+
+    current = start_date_obj
+    while current >= end_date_obj:
+        dates.append(current.strftime('%Y-%m-%d'))
+        current -= timedelta(days=1)
+
+    return dates
