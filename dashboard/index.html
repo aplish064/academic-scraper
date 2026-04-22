@@ -774,6 +774,10 @@
                 const isFwciAvailable = stats.avg_fwci > 0 && data.source === 'openalex';
                 const fwciCard = document.getElementById('fwciCard');
                 const fwciColumnHeader = document.getElementById('fwciColumnHeader');
+                const ccfClassCard = document.getElementById('ccfClassCard');
+                const pubTypeCard = document.getElementById('pubTypeCard');
+                const venueTypeCard = document.getElementById('venueTypeCard');
+
                 if (fwciCard) {
                     if (isFwciAvailable) {
                         fwciCard.style.display = 'block';
@@ -786,9 +790,6 @@
                 }
 
                 // DBLP特有字段处理
-                const ccfClassCard = document.getElementById('ccfClassCard');
-                const pubTypeCard = document.getElementById('pubTypeCard');
-                const venueTypeCard = document.getElementById('venueTypeCard');
 
                 if (data.source === 'dblp') {
                     // 显示DBLP特有卡片
@@ -818,9 +819,6 @@
                 const countryCard = document.getElementById('countryCard');
                 const instTypeCard = document.getElementById('instTypeCard');
                 const fwciDistCard = document.getElementById('fwciDistCard');
-                const ccfClassCard = document.getElementById('ccfClassCard');
-                const pubTypeCard = document.getElementById('pubTypeCard');
-                const venueTypeCard = document.getElementById('venueTypeCard');
 
                 // 只在OpenAlex数据源时显示这些图表，semantic和全部数据都隐藏
                 if (data.source === 'openalex') {
