@@ -571,7 +571,7 @@
             </div>
 
             <!-- 引用分布 - 柱状图 -->
-            <div class="chart-card">
+            <div class="chart-card" id="citationDistCard">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">引用次数分布</div>
@@ -819,12 +819,14 @@
                 const countryCard = document.getElementById('countryCard');
                 const instTypeCard = document.getElementById('instTypeCard');
                 const fwciDistCard = document.getElementById('fwciDistCard');
+                const citationDistCard = document.getElementById('citationDistCard');
 
                 // 只在OpenAlex数据源时显示这些图表，semantic和全部数据都隐藏
                 if (data.source === 'openalex') {
                     if (countryCard) countryCard.style.display = 'block';
                     if (instTypeCard) instTypeCard.style.display = 'block';
                     if (fwciDistCard) fwciDistCard.style.display = 'block';
+                    if (citationDistCard) citationDistCard.style.display = 'block';
                     if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
@@ -833,6 +835,7 @@
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
+                    if (citationDistCard) citationDistCard.style.display = 'none';
                     if (ccfClassCard) ccfClassCard.style.display = 'block';
                     if (pubTypeCard) pubTypeCard.style.display = 'block';
                     if (venueTypeCard) venueTypeCard.style.display = 'block';
@@ -841,12 +844,23 @@
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
+                    if (citationDistCard) citationDistCard.style.display = 'none';
                     if (ccfClassCard) ccfClassCard.style.display = 'block';
                     if (pubTypeCard) pubTypeCard.style.display = 'block';
                     if (venueTypeCard) venueTypeCard.style.display = 'block';
                 }
 
                 animateNumber(document.getElementById('highCitations'), stats.high_citations);
+
+                // 根据数据源显示/隐藏高被引统计卡片
+                const highCitationsCard = document.getElementById('highCitationsCard').parentElement;
+                if (highCitationsCard) {
+                    if (data.source === 'dblp') {
+                        highCitationsCard.style.display = 'none';  // DBLP没有引用数据
+                    } else {
+                        highCitationsCard.style.display = 'block';
+                    }
+                }
 
                 // Update timestamps and data source info
                 const now = new Date();
@@ -860,9 +874,13 @@
                 // 创建图表（根据数据源选择性创建）
                 const chartsToCreate = [
                     createPapersTrendChartFromAggregated(data.papers_by_date),
-                    createCitationDistChartFromAggregated(data.citations_distribution),
                     createJournalDistChartFromAggregated(data.top_journals)
                 ];
+
+                // 只为有引用数据的数据源创建引用分布图（OpenAlex和Semantic）
+                if (data.source !== 'dblp' && Object.keys(data.citations_distribution || {}).length > 0) {
+                    chartsToCreate.push(createCitationDistChartFromAggregated(data.citations_distribution));
+                }
 
                 // 只为OpenAlex创建的图表（全部数据和semantic都不显示这些图表）
                 if (data.source === 'openalex') {
@@ -988,7 +1006,11 @@
 
         // Papers trend chart from aggregated data
         function createPapersTrendChartFromAggregated(papersByDate) {
-            const sortedDates = Object.keys(papersByDate).sort();
+            // 过滤掉无效的日期键（如"None"、"null"等）
+            const validDates = Object.keys(papersByDate).filter(d =>
+                d && d !== 'None' && d !== 'null' && d !== '' && d.length >= 7
+            );
+            const sortedDates = validDates.sort();
             const data = sortedDates.map(d => papersByDate[d]);
             const labels = sortedDates;  // 显示完整年月（YYYY-MM）
 
