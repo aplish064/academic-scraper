@@ -1004,7 +1004,10 @@
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
                 }
 
-                animateNumber(document.getElementById('highCitations'), stats.high_citations);
+                // 只为有high_citations字段的数据源显示高被引论文统计
+                if (stats.high_citations !== undefined) {
+                    animateNumber(document.getElementById('highCitations'), stats.high_citations);
+                }
 
                 // 根据数据源显示/隐藏高被引统计卡片
                 const highCitationsElement = document.getElementById('highCitations');
