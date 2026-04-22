@@ -27,6 +27,7 @@ REQUEST_TIMEOUT = 30          # 请求超时（秒）
 MAX_RETRIES = 3               # 最大重试次数
 PER_PAGE = 3000              # 每页论文数
 RATE_LIMIT_WAIT = 60          # 速率限制等待时间（秒）
+TIMEOUT_RETRY_WAIT = 5        # 超时重试等待时间（秒）
 
 # 时间范围配置
 START_DATE = "2026-04-22"     # 开始日期
@@ -166,3 +167,60 @@ def date_to_key(date_str: str) -> str:
 def key_to_date(key: str) -> str:
     """将进度文件键转换为日期字符串 (YYYY-MM-DD)"""
     return f"{key[:4]}-{key[4:6]}-{key[6:]}"
+
+# =============================================================================
+# HTTP 客户端（带重试机制）
+# =============================================================================
+
+def make_request(url: str, params: dict) -> Optional[str]:
+    """发送 HTTP 请求，带有重试机制
+
+    Args:
+        url: 请求 URL
+        params: 查询参数
+
+    Returns:
+        响应文本，失败返回 None
+    """
+    for retry_count in range(MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+
+            # 处理速率限制
+            if response.status_code == 429:
+                log_message("⚠️  速率限制，暂停 60 秒...", "WARNING")
+                resume_time = datetime.now() + timedelta(seconds=RATE_LIMIT_WAIT)
+                log_message(f"   将在 {resume_time.strftime('%H:%M:%S')} 恢复", "WARNING")
+                time.sleep(RATE_LIMIT_WAIT)
+                continue  # 重试
+
+            # 处理服务器错误
+            elif response.status_code >= 500:
+                wait_time = min((2 ** retry_count) * 2, 60)
+                log_message(f"服务器错误 ({response.status_code})，等待 {wait_time} 秒后重试", "WARNING")
+                time.sleep(wait_time)
+                continue  # 重试
+
+            # 处理其他错误
+            elif response.status_code != 200:
+                log_message(f"HTTP {response.status_code}: {response.text[:200]}", "ERROR")
+                return None
+
+            # 成功
+            return response.text
+
+        except requests.exceptions.Timeout:
+            wait_time = min((2 ** retry_count) * 2, 60)
+            log_message(f"请求超时，等待 {wait_time} 秒后重试", "WARNING")
+            time.sleep(wait_time)
+            continue  # 重试
+
+        except Exception as e:
+            wait_time = min((2 ** retry_count) * 2, 60)
+            log_message(f"请求异常: {e}，等待 {wait_time} 秒后重试", "ERROR")
+            time.sleep(wait_time)
+            continue  # 重试
+
+    # 达到最大重试次数
+    log_message("❌ 达到最大重试次数", "ERROR")
+    return None
