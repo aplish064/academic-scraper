@@ -528,6 +528,7 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
 
     seen_paper_ids = set()
     total_papers = 0
+    total_rows = 0
     current_page = start_page
 
     while True:
@@ -587,6 +588,7 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
 
         if rows and batch_insert_clickhouse(ch_client, rows):
             total_papers += len(page_papers)
+            total_rows += len(rows)
 
             # 更新进度
             update_journal_progress(
@@ -614,4 +616,4 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
     save_progress(progress_data)
 
     log_message(f"✓ {journal_name}: 完成 {total_papers}篇论文")
-    return total_papers, len(rows) if total_papers > 0 else 0
+    return total_papers, total_rows
