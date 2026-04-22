@@ -55,3 +55,63 @@ LOG_BUFFER_SIZE = 100         # 日志缓冲大小
 
 # 全局变量
 log_buffer = []
+
+# =============================================================================
+# 日志系统
+# =============================================================================
+
+def setup_logging():
+    """创建日志目录和初始化日志系统"""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 配置 logging 模块
+    logger = logging.getLogger('arxiv_fetcher')
+    logger.setLevel(logging.INFO)
+
+    # Main log handler
+    main_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    main_handler.setLevel(logging.INFO)
+    main_formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s')
+    main_handler.setFormatter(main_formatter)
+    logger.addHandler(main_handler)
+
+    # Error log handler
+    error_handler = logging.FileHandler(ERROR_LOG_FILE, encoding='utf-8')
+    error_handler.setLevel(logging.WARNING)
+    error_handler.setFormatter(main_formatter)
+    logger.addHandler(error_handler)
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+def log_message(message: str, level: str = "INFO"):
+    """记录日志消息"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_line = f"[{timestamp}] [{level}] {message}\n"
+
+    # 添加到缓冲区
+    log_buffer.append(log_line)
+
+    # 缓冲区满了就写入文件
+    if len(log_buffer) >= LOG_BUFFER_SIZE:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.writelines(log_buffer)
+        log_buffer.clear()
+
+    # 同时输出到控制台
+    print(log_line.strip())
+
+
+def flush_log_buffer():
+    """刷新日志缓冲区到文件"""
+    if log_buffer:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.writelines(log_buffer)
+        log_buffer.clear()
