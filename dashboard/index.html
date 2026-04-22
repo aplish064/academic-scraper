@@ -789,31 +789,16 @@
                     }
                 }
 
-                // DBLP特有字段处理
+                // DBLP特有统计卡片 - 隐藏（用户不要求显示数字）
+                // 图表仍然会显示
+                const ccfClassCard = document.getElementById('ccfClassCard');
+                const pubTypeCard = document.getElementById('pubTypeCard');
+                const venueTypeCard = document.getElementById('venueTypeCard');
 
-                if (data.source === 'dblp') {
-                    // 显示DBLP特有卡片
-                    if (ccfClassCard) {
-                        ccfClassCard.style.display = 'block';
-                        const ccfCount = Object.keys(data.ccf_class_distribution || {}).length;
-                        document.getElementById('ccfClassCount').textContent = ccfCount;
-                    }
-                    if (pubTypeCard) {
-                        pubTypeCard.style.display = 'block';
-                        const pubTypeCount = Object.keys(data.publication_type_distribution || {}).length;
-                        document.getElementById('pubTypeCount').textContent = pubTypeCount;
-                    }
-                    if (venueTypeCard) {
-                        venueTypeCard.style.display = 'block';
-                        const venueTypeCount = Object.keys(data.venue_type_distribution || {}).length;
-                        document.getElementById('venueTypeCount').textContent = venueTypeCount;
-                    }
-                } else {
-                    // 隐藏DBLP特有卡片
-                    if (ccfClassCard) ccfClassCard.style.display = 'none';
-                    if (pubTypeCard) pubTypeCard.style.display = 'none';
-                    if (venueTypeCard) venueTypeCard.style.display = 'none';
-                }
+                // 始终隐藏这三个统计卡片（只显示图表）
+                if (ccfClassCard) ccfClassCard.style.display = 'none';
+                if (pubTypeCard) pubTypeCard.style.display = 'none';
+                if (venueTypeCard) venueTypeCard.style.display = 'none';
 
                 // 根据数据源显示/隐藏图表卡片
                 const countryCard = document.getElementById('countryCard');
@@ -821,8 +806,9 @@
                 const fwciDistCard = document.getElementById('fwciDistCard');
                 const citationDistCard = document.getElementById('citationDistCard');
 
-                // 只在OpenAlex数据源时显示这些图表，semantic和全部数据都隐藏
+                // 根据数据源显示/隐藏图表卡片
                 if (data.source === 'openalex') {
+                    // OpenAlex：显示所有图表
                     if (countryCard) countryCard.style.display = 'block';
                     if (instTypeCard) instTypeCard.style.display = 'block';
                     if (fwciDistCard) fwciDistCard.style.display = 'block';
@@ -831,22 +817,31 @@
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
                 } else if (data.source === 'dblp') {
-                    // DBLP数据源显示特有图表
+                    // DBLP：只显示特有图表
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
                     if (citationDistCard) citationDistCard.style.display = 'none';
-                    if (ccfClassCard) ccfClassCard.style.display = 'block';
-                    if (pubTypeCard) pubTypeCard.style.display = 'block';
-                    if (venueTypeCard) venueTypeCard.style.display = 'block';
+                    if (ccfClassCard) ccfClassCard.style.display = 'none';
+                    if (pubTypeCard) pubTypeCard.style.display = 'none';
+                    if (venueTypeCard) venueTypeCard.style.display = 'none';
+                } else if (data.source === 'semantic') {
+                    // Semantic：显示基础图表（引用分布）
+                    if (countryCard) countryCard.style.display = 'none';
+                    if (instTypeCard) instTypeCard.style.display = 'none';
+                    if (fwciDistCard) fwciDistCard.style.display = 'none';
+                    if (citationDistCard) citationDistCard.style.display = 'block';
+                    if (ccfClassCard) ccfClassCard.style.display = 'none';
+                    if (pubTypeCard) pubTypeCard.style.display = 'none';
+                    if (venueTypeCard) venueTypeCard.style.display = 'none';
                 } else {
-                    // 全部数据源：显示OpenAlex图表 + DBLP特有图表
+                    // 全部数据：显示OpenAlex图表 + DBLP特有图表 + 引用分布
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
-                    if (citationDistCard) citationDistCard.style.display = 'none';
+                    if (citationDistCard) citationDistCard.style.display = 'block';
                     if (ccfClassCard) ccfClassCard.style.display = 'block';
-                    if (pubTypeCard) pubTypeCard.style.display = 'block';
+                    if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'block';
                 }
 
@@ -878,8 +873,8 @@
                     createJournalDistChartFromAggregated(data.top_journals)
                 ];
 
-                // 只为有引用数据的数据源创建引用分布图（OpenAlex和Semantic）
-                if (data.source !== 'dblp' && Object.keys(data.citations_distribution || {}).length > 0) {
+                // 只为有引用数据的数据源创建引用分布图（OpenAlex、Semantic，排除DBLP）
+                if ((data.source === 'openalex' || data.source === 'semantic' || data.source === 'all') && Object.keys(data.citations_distribution || {}).length > 0) {
                     chartsToCreate.push(createCitationDistChartFromAggregated(data.citations_distribution));
                 }
 
@@ -1007,13 +1002,24 @@
 
         // Papers trend chart from aggregated data
         function createPapersTrendChartFromAggregated(papersByDate) {
+            // 调试：输出原始数据
+            console.log('createPapersTrendChartFromAggregated - 原始数据:', papersByDate);
+            console.log('数据键:', Object.keys(papersByDate));
+
             // 过滤掉无效的日期键（如"None"、"null"等）
             const validDates = Object.keys(papersByDate).filter(d =>
                 d && d !== 'None' && d !== 'null' && d !== '' && d.length >= 7
             );
+
+            console.log('有效日期:', validDates);
+            console.log('有效日期数量:', validDates.length);
+
             const sortedDates = validDates.sort();
             const data = sortedDates.map(d => papersByDate[d]);
             const labels = sortedDates;  // 显示完整年月（YYYY-MM）
+
+            console.log('排序后日期:', sortedDates);
+            console.log('图表数据:', data);
 
             if (charts.papersTrend) charts.papersTrend.destroy();
 
