@@ -468,6 +468,9 @@ def get_aggregated_data():
         'top_countries': {},
         'institution_types': {},
         'fwci_distribution': {},
+        'ccf_class_distribution': {},
+        'publication_type_distribution': {},
+        'venue_type_distribution': {},
         'statistics': {},
         'source': source,
         'table': table_name
@@ -476,7 +479,7 @@ def get_aggregated_data():
     try:
         # 1. 统计总览 - 使用DOI去重，根据数据源使用不同的查询
         step_start = time.time()
-        print(f"[步骤 1/8] 统计总览查询...")
+        print(f"[步骤 1/11] 统计总览查询...")
         if source == 'openalex':
             # OpenAlex有完整字段，使用近似计数大幅提升性能
             stats_sql = f"""
@@ -489,6 +492,19 @@ def get_aggregated_data():
                 round(avgIf(fwci, fwci > 0), 2) as avg_fwci
             FROM {table_name}
             SETTINGS max_threads=4, max_execution_time=30
+            """
+        elif source == 'dblp':
+            # DBLP字段，使用venue而不是journal
+            stats_sql = f"""
+            SELECT
+                uniqHLL12(doi) as total_papers,
+                uniqHLL12(author_name) as unique_authors,
+                uniqHLL12(venue) as unique_journals,
+                0 as unique_institutions,
+                uniqHLL12(doi) FILTER (WHERE citation_count >= 50) as high_citations,
+                0 as avg_fwci
+            FROM {table_name}
+            SETTINGS max_threads=1, max_execution_time=30
             """
         else:
             # Semantic字段较少，使用简化统计
@@ -520,7 +536,7 @@ def get_aggregated_data():
 
         # 2. 按论文发表日期统计 - 精确到月份，使用DOI去重
         step_start = time.time()
-        print(f"[步骤 2/8] 按日期统计...")
+        print(f"[步骤 2/11] 按日期统计...")
         # 统一使用publication_date字段提取年月
         date_sql = f"""
         SELECT
@@ -542,7 +558,7 @@ def get_aggregated_data():
 
         # 3. 引用数分布 - 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 3/8] 引用数分布查询...")
+        print(f"[步骤 3/11] 引用数分布查询...")
         citation_sql = f"""
         SELECT
             multiIf(
@@ -571,7 +587,7 @@ def get_aggregated_data():
 
         # 4. 作者类型分布（基于tag字段）
         step_start = time.time()
-        print(f"[步骤 4/8] 作者类型分布查询...")
+        print(f"[步骤 4/11] 作者类型分布查询...")
         author_sql = f"""
         SELECT
             tag,
@@ -593,16 +609,22 @@ def get_aggregated_data():
 
         # 5. Top期刊 - 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 5/8] Top期刊查询...")
+        print(f"[步骤 5/11] Top期刊查询...")
+        # DBLP使用venue字段，其他数据源使用journal字段
+        if source == 'dblp':
+            journal_field = 'venue'
+        else:
+            journal_field = 'journal'
+
         journal_sql = f"""
         SELECT
-            journal,
+            {journal_field},
             uniqHLL12(doi) as count
         FROM {table_name}
-        WHERE journal != ''
-            AND length(journal) > 3
-            AND lower(journal) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
-        GROUP BY journal
+        WHERE {journal_field} != ''
+            AND length({journal_field}) > 3
+            AND lower({journal_field}) not in ('unknown', 'unknow', 'n/a', 'na', 'null')
+        GROUP BY {journal_field}
         ORDER BY count DESC
         LIMIT 50
         SETTINGS max_threads=8, max_execution_time=60
@@ -617,7 +639,7 @@ def get_aggregated_data():
 
         # 6. Top国家（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 6/8] Top国家查询...")
+        print(f"[步骤 6/11] Top国家查询...")
         if source == 'openalex':
             country_sql = f"""
             SELECT
@@ -644,7 +666,7 @@ def get_aggregated_data():
 
         # 7. 机构类型分布（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 7/8] 机构类型分布查询...")
+        print(f"[步骤 7/11] 机构类型分布查询...")
         if source == 'openalex':
             inst_type_sql = f"""
             SELECT
@@ -669,7 +691,7 @@ def get_aggregated_data():
 
         # 8. FWCI分布（仅OpenAlex支持）- 使用DOI去重
         step_start = time.time()
-        print(f"[步骤 8/8] FWCI分布查询...")
+        print(f"[步骤 8/11] FWCI分布查询...")
         if source == 'openalex':
             fwci_sql = f"""
             SELECT
@@ -697,6 +719,60 @@ def get_aggregated_data():
             print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
         else:
             print(f"  ⊘ 跳过 (仅OpenAlex支持)")
+
+        # 9. DBLP特有字段查询（仅DBLP）
+        if source == 'dblp':
+            step_start = time.time()
+            print(f"[步骤 9/11] CCF等级分布查询...")
+            ccf_sql = f"""
+            SELECT ccf_class, uniqHLL12(doi) as count
+            FROM {table_name}
+            WHERE ccf_class != ''
+            GROUP BY ccf_class
+            ORDER BY count DESC
+            """
+            ccf_result = query_clickhouse(ccf_sql)
+            if ccf_result:
+                for row in ccf_result.result_rows:
+                    result['ccf_class_distribution'][row[0]] = int(row[1])
+            step_time = time.time() - step_start
+            print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
+
+            # 10. 发表类型分布
+            step_start = time.time()
+            print(f"[步骤 10/11] 发表类型分布查询...")
+            pub_type_sql = f"""
+            SELECT publication_type, uniqHLL12(doi) as count
+            FROM {table_name}
+            WHERE publication_type != ''
+            GROUP BY publication_type
+            ORDER BY count DESC
+            """
+            pub_type_result = query_clickhouse(pub_type_sql)
+            if pub_type_result:
+                for row in pub_type_result.result_rows:
+                    result['publication_type_distribution'][row[0]] = int(row[1])
+            step_time = time.time() - step_start
+            print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
+
+            # 11. 场地类型分布
+            step_start = time.time()
+            print(f"[步骤 11/11] 场地类型分布查询...")
+            venue_type_sql = f"""
+            SELECT venue_type, uniqHLL12(doi) as count
+            FROM {table_name}
+            WHERE venue_type != ''
+            GROUP BY venue_type
+            ORDER BY count DESC
+            """
+            venue_type_result = query_clickhouse(venue_type_sql)
+            if venue_type_result:
+                for row in venue_type_result.result_rows:
+                    result['venue_type_distribution'][row[0]] = int(row[1])
+            step_time = time.time() - step_start
+            print(f"  ✓ 完成 (耗时: {step_time:.2f}秒)")
+        else:
+            print(f"[步骤 9-11/11] ⊘ 跳过 (仅DBLP支持)")
 
         total_time = time.time() - start_time if 'start_time' in locals() else 0
         print(f"\n{'='*60}")
