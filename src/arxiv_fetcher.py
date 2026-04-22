@@ -472,37 +472,31 @@ def create_clickhouse_client():
 def create_arxiv_table(client):
     """创建 arXiv 表（如果不存在）"""
     try:
-        # 检查表是否存在
-        tables = client.query(f"EXISTS TABLE {CH_DATABASE}.{CH_TABLE}").first_row
+        # 直接使用 CREATE TABLE IF NOT EXISTS
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {CH_DATABASE}.{CH_TABLE} (
+            arxiv_id String,
+            uid String,
+            title String,
+            published Date,
+            updated DateTime,
+            categories Array(String),
+            primary_category String,
+            journal_ref String,
+            comment String,
+            url String,
+            pdf_url String,
+            author String,
+            rank UInt16,
+            tag String,
+            affiliation String,
+            import_date Date
+        ) ENGINE = MergeTree()
+        ORDER BY (arxiv_id, rank)
+        """
 
-        if tables == 0:
-            # 创建表
-            create_table_sql = f"""
-            CREATE TABLE {CH_DATABASE}.{CH_TABLE} (
-                arxiv_id String,
-                uid String,
-                title String,
-                published Date,
-                updated DateTime,
-                categories Array(String),
-                primary_category String,
-                journal_ref String,
-                comment String,
-                url String,
-                pdf_url String,
-                author String,
-                rank UInt8,
-                tag String,
-                affiliation String,
-                import_date Date
-            ) ENGINE = MergeTree()
-            ORDER BY (arxiv_id, rank)
-            """
-
-            client.command(create_table_sql)
-            log_message(f"✅ 创建表 {CH_DATABASE}.{CH_TABLE}")
-        else:
-            log_message(f"ℹ️  表 {CH_DATABASE}.{CH_TABLE} 已存在")
+        client.command(create_table_sql)
+        log_message(f"✅ 表 {CH_DATABASE}.{CH_TABLE} 就绪")
 
     except Exception as e:
         log_message(f"创建表失败: {e}", "ERROR")
@@ -724,18 +718,20 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
 class ArxivFetcher:
     """arXiv 论文获取器"""
 
-    def __init__(self, start_date: str, end_year: int, ch_client=None):
+    def __init__(self, start_date: str, end_year: int, ch_client=None, test_days=None):
         """初始化
 
         Args:
             start_date: 开始日期 (YYYY-MM-DD)
             end_year: 结束年份
             ch_client: ClickHouse 客户端（可选）
+            test_days: 测试模式，只获取指定天数（可选）
         """
         self.start_date = start_date
         self.end_year = end_year
         self.ch_client = ch_client or create_clickhouse_client()
         self.progress = load_progress()
+        self.test_days = test_days
 
     def run(self):
         """执行主流程"""
@@ -759,6 +755,12 @@ class ArxivFetcher:
 
         # 生成日期列表
         all_dates = get_all_dates_backward(self.start_date, self.end_year)
+
+        # 测试模式：限制天数
+        if self.test_days:
+            all_dates = all_dates[:self.test_days]
+            log_message(f"🧪 测试模式：仅处理前 {self.test_days} 天")
+
         self.progress['total_dates'] = len(all_dates)
 
         # 过滤已完成的日期
@@ -828,6 +830,8 @@ def main():
                        help='每页论文数')
     parser.add_argument('--dry-run', action='store_true',
                        help='试运行模式，不写入数据库')
+    parser.add_argument('--test-days', type=int, default=None,
+                       help='测试模式：只获取指定天数的数据')
 
     args = parser.parse_args()
 
@@ -836,7 +840,7 @@ def main():
 
     try:
         # 创建 fetcher
-        fetcher = ArxivFetcher(args.start_date, args.end_year)
+        fetcher = ArxivFetcher(args.start_date, args.end_year, test_days=args.test_days)
 
         # 运行
         fetcher.run()
