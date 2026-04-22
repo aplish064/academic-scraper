@@ -343,6 +343,38 @@ def query_arxiv_statistics():
         }
 
 
+def query_arxiv_category_distribution():
+    """查询arxiv主分类分布"""
+    client = get_ch_client()
+    if not client:
+        return {}
+
+    try:
+        sql = """
+            SELECT
+                primary_category,
+                count() as paper_count
+            FROM academic_db.arxiv
+            WHERE primary_category != ''
+            GROUP BY primary_category
+            ORDER BY paper_count DESC
+            LIMIT 50
+        """
+
+        result = client.query(sql)
+        category_dist = {}
+        if result.result_rows:
+            for row in result.result_rows:
+                category = str(row[0]) if row[0] else 'Unknown'
+                count = int(row[1]) if row[1] else 0
+                category_dist[category] = count
+
+        return category_dist
+    except Exception as e:
+        print(f"❌ 查询arxiv分类分布失败: {e}")
+        return {}
+
+
 def try_merge_from_cache():
     """尝试从openalex、semantic和dblp缓存合并数据"""
     if not USE_CACHE or not redis_client:
