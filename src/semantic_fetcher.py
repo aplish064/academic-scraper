@@ -617,3 +617,159 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
 
     log_message(f"✓ {journal_name}: 完成 {total_papers}篇论文")
     return total_papers, total_rows
+
+
+# ============ 主执行函数 ============
+
+
+def execute_journal_fetching(validated_journals: Dict[str, Dict[str, Any]],
+                            progress_data: dict,
+                            ch_client) -> Tuple[int, int]:
+    """执行论文获取主流程
+
+    Args:
+        validated_journals: 验证通过的期刊字典
+        progress_data: 进度数据
+        ch_client: ClickHouse客户端
+
+    Returns:
+        tuple: (总论文数, 总行数)
+    """
+    log_message("开始获取论文")
+    print("\n📥 获取论文...")
+
+    total_papers = 0
+    total_rows = 0
+
+    # 统计各状态
+    status_count = {
+        "completed": len([j for j in progress_data["journals"].values()
+                         if j["status"] == "completed"]),
+        "in_progress": 0,
+        "pending": 0
+    }
+
+    # 待处理的期刊
+    pending_journals = [
+        (name, info) for name, info in validated_journals.items()
+        if info["status"] == "valid" or
+           (name in progress_data["journals"] and
+            progress_data["journals"][name]["status"] in ["valid", "in_progress"])
+    ]
+
+    with tqdm(total=len(pending_journals), desc="   进度",
+              unit="期刊", ncols=80) as pbar:
+        for journal_name, journal_info in pending_journals:
+            # 检查状态
+            if journal_name in progress_data["journals"]:
+                existing = progress_data["journals"][journal_name]
+                if existing["status"] == "completed":
+                    status_count["completed"] += 1
+                    total_papers += existing.get("papers_fetched", 0)
+                    pbar.update(1)
+                    continue
+                elif existing["status"] == "in_progress":
+                    start_page = existing.get("current_page", 0)
+                    status_count["in_progress"] += 1
+                else:
+                    start_page = 0
+                    status_count["pending"] += 1
+            else:
+                start_page = 0
+                status_count["pending"] += 1
+
+            # 获取论文
+            query_type = journal_info.get("query_type", "venue")
+            papers, rows = fetch_papers_by_journal(
+                journal_name, query_type, start_page,
+                progress_data, ch_client
+            )
+
+            total_papers += papers
+            total_rows += rows
+
+            pbar.update(1)
+            pbar.set_postfix_str(f"已完成:{status_count['completed']} 进行中:{status_count['in_progress']}")
+
+    print(f"\n✅ 获取完成")
+    log_message(f"获取完成: {total_papers}篇论文, {total_rows}行")
+
+    return total_papers, total_rows
+
+
+def main():
+    """主函数"""
+    print("=" * 60)
+    print("Semantic Scholar 期刊表论文获取器")
+    print("=" * 60)
+    print(f"CSV 文件: {CSV_PATH}")
+    print(f"查询策略: venue → query")
+    print(f"时间范围: 所有年份")
+    print(f"请求间隔: {REQUEST_INTERVAL}秒")
+    print("=" * 60)
+
+    start_time = time.time()
+
+    # 创建必要的目录
+    setup_directories()
+
+    # 加载进度
+    progress = load_progress()
+
+    # 创建ClickHouse客户端
+    ch_client = create_clickhouse_client()
+    if not ch_client:
+        log_message("ClickHouse连接失败，程序退出", "ERROR")
+        return
+
+    # 1. 加载期刊列表
+    print("\n📊 加载期刊列表...")
+    try:
+        journal_list = load_journals_from_csv(CSV_PATH)
+        progress["total_journals"] = len(journal_list)
+        progress["csv_loaded_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_progress(progress)
+
+        print(f"   总计: {len(journal_list)} 个期刊")
+    except Exception as e:
+        log_message(f"加载期刊列表失败: {e}", "ERROR")
+        return
+
+    # 2. 批量验证
+    validated_journals = batch_validate_journals(journal_list, progress)
+
+    if not validated_journals:
+        log_message("没有有效的期刊，程序退出", "WARNING")
+        return
+
+    # 3. 获取论文
+    total_papers, total_rows = execute_journal_fetching(
+        validated_journals, progress, ch_client
+    )
+
+    # 总结
+    elapsed_time = time.time() - start_time
+
+    log_message("=" * 60)
+    log_message("✅ 全部完成")
+    log_message(f"📊 统计:")
+    log_message(f"   总期刊: {progress['total_journals']} 个")
+    log_message(f"   有效: {len(validated_journals)} 个")
+    log_message(f"   失败: {progress['total_journals'] - len(validated_journals)} 个")
+    log_message(f"   总论文: {total_papers:,} 篇")
+    log_message(f"   总行数: {total_rows:,} 行")
+    log_message(f"⏱️  总耗时: {elapsed_time:.1f} 秒 ({elapsed_time/60:.1f} 分钟)")
+    log_message("=" * 60)
+
+    print("\n" + "=" * 60)
+    print("✅ 全部完成")
+    print(f"📊 总期刊: {progress['total_journals']} 个 | "
+          f"有效: {len(validated_journals)} 个 | "
+          f"失败: {progress['total_journals'] - len(validated_journals)} 个")
+    print(f"📄 总论文: {total_papers:,} 篇 | 总行数: {total_rows:,} 行")
+    print(f"⏱️  总耗时: {elapsed_time:.1f} 秒 ({elapsed_time/60:.1f} 分钟)")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
