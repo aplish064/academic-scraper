@@ -272,6 +272,77 @@ def query_papers_by_date_union():
         return {}
 
 
+def query_arxiv_statistics():
+    """查询arxiv基础统计数据"""
+    client = get_ch_client()
+    if not client:
+        return {
+            'total_papers': 0,
+            'unique_authors': 0,
+            'unique_categories': 0,
+            'earliest_date': 'N/A',
+            'latest_date': 'N/A',
+            'error': '数据库连接失败'
+        }
+
+    try:
+        # 论文总数
+        total_papers_sql = "SELECT count() FROM academic_db.arxiv"
+        total_papers_result = client.query(total_papers_sql)
+        total_papers = total_papers_result.result_rows[0][0] if total_papers_result.result_rows else 0
+
+        # 唯一作者数
+        authors_sql = """
+            SELECT uniqExact(author)
+            FROM academic_db.arxiv
+            WHERE author != ''
+        """
+        authors_result = client.query(authors_sql)
+        unique_authors = authors_result.result_rows[0][0] if authors_result.result_rows else 0
+
+        # 唯一主分类数
+        categories_sql = """
+            SELECT uniqExact(primary_category)
+            FROM academic_db.arxiv
+            WHERE primary_category != ''
+        """
+        categories_result = client.query(categories_sql)
+        unique_categories = categories_result.result_rows[0][0] if categories_result.result_rows else 0
+
+        # 时间跨度 (published是Date类型，不能与空字符串比较)
+        timespan_sql = """
+            SELECT
+                min(published) as earliest,
+                max(published) as latest
+            FROM academic_db.arxiv
+        """
+        timespan_result = client.query(timespan_sql)
+        if timespan_result.result_rows:
+            earliest_date = str(timespan_result.result_rows[0][0])
+            latest_date = str(timespan_result.result_rows[0][1])
+        else:
+            earliest_date = 'N/A'
+            latest_date = 'N/A'
+
+        return {
+            'total_papers': total_papers,
+            'unique_authors': unique_authors,
+            'unique_categories': unique_categories,
+            'earliest_date': earliest_date,
+            'latest_date': latest_date
+        }
+    except Exception as e:
+        print(f"❌ 查询arxiv统计失败: {e}")
+        return {
+            'total_papers': 0,
+            'unique_authors': 0,
+            'unique_categories': 0,
+            'earliest_date': 'N/A',
+            'latest_date': 'N/A',
+            'error': str(e)
+        }
+
+
 def try_merge_from_cache():
     """尝试从openalex、semantic和dblp缓存合并数据"""
     if not USE_CACHE or not redis_client:
@@ -1447,76 +1518,6 @@ if __name__ == '__main__':
         cache_timer = Timer(0, delayed_cache_init)
         cache_timer.daemon = True
         cache_timer.start()
-
-def query_arxiv_statistics():
-    """查询arxiv基础统计数据"""
-    client = get_ch_client()
-    if not client:
-        return {
-            'total_papers': 0,
-            'unique_authors': 0,
-            'unique_categories': 0,
-            'earliest_date': 'N/A',
-            'latest_date': 'N/A',
-            'error': '数据库连接失败'
-        }
-
-    try:
-        # 论文总数
-        total_papers_sql = "SELECT count() FROM academic_db.arxiv"
-        total_papers_result = client.query(total_papers_sql)
-        total_papers = total_papers_result.result_rows[0][0] if total_papers_result.result_rows else 0
-
-        # 唯一作者数
-        authors_sql = """
-            SELECT uniqExact(author)
-            FROM academic_db.arxiv
-            WHERE author != ''
-        """
-        authors_result = client.query(authors_sql)
-        unique_authors = authors_result.result_rows[0][0] if authors_result.result_rows else 0
-
-        # 唯一主分类数
-        categories_sql = """
-            SELECT uniqExact(primary_category)
-            FROM academic_db.arxiv
-            WHERE primary_category != ''
-        """
-        categories_result = client.query(categories_sql)
-        unique_categories = categories_result.result_rows[0][0] if categories_result.result_rows else 0
-
-        # 时间跨度 (published是Date类型，不能与空字符串比较)
-        timespan_sql = """
-            SELECT
-                min(published) as earliest,
-                max(published) as latest
-            FROM academic_db.arxiv
-        """
-        timespan_result = client.query(timespan_sql)
-        if timespan_result.result_rows:
-            earliest_date = str(timespan_result.result_rows[0][0])
-            latest_date = str(timespan_result.result_rows[0][1])
-        else:
-            earliest_date = 'N/A'
-            latest_date = 'N/A'
-
-        return {
-            'total_papers': total_papers,
-            'unique_authors': unique_authors,
-            'unique_categories': unique_categories,
-            'earliest_date': earliest_date,
-            'latest_date': latest_date
-        }
-    except Exception as e:
-        print(f"❌ 查询arxiv统计失败: {e}")
-        return {
-            'total_papers': 0,
-            'unique_authors': 0,
-            'unique_categories': 0,
-            'earliest_date': 'N/A',
-            'latest_date': 'N/A',
-            'error': str(e)
-        }
 
     # 启动Flask服务器
     app.run(**FLASK_CONFIG)
