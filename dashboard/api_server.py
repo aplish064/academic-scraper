@@ -197,6 +197,36 @@ def query_total_unique_authors():
         return 0
 
 
+def query_total_unique_venues():
+    """查询三个表的总唯一期刊数（按venue/journal去重）"""
+    try:
+        client = get_ch_client()
+        if not client:
+            return 0
+
+        # 使用UNION ALL获取三个表的所有期刊，然后去重
+        venue_sql = """
+        SELECT uniqExact(venue) as count
+        FROM (
+            SELECT journal as venue FROM OpenAlex WHERE journal != ''
+            UNION ALL
+            SELECT journal as venue FROM semantic WHERE journal != ''
+            UNION ALL
+            SELECT venue FROM dblp WHERE venue != ''
+        )
+        WHERE venue != ''
+        SETTINGS max_execution_time=120
+        """
+
+        result = client.query(venue_sql)
+        if result and result.result_rows:
+            return result.result_rows[0][0]
+        return 0
+    except Exception as e:
+        print(f"⚠️  查询总期刊数失败: {e}")
+        return 0
+
+
 def try_merge_from_cache():
     """尝试从openalex和semantic缓存合并数据"""
     if not USE_CACHE or not redis_client:
