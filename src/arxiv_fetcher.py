@@ -21,7 +21,7 @@ from tqdm import tqdm
 # =============================================================================
 
 # API 配置
-ARXIV_API_BASE = "http://export.arxiv.org/api/query"
+ARXIV_API_BASE = "https://export.arxiv.org/api/query"
 REQUEST_INTERVAL = 1.0        # 请求间隔（秒）
 REQUEST_TIMEOUT = 30          # 请求超时（秒）
 MAX_RETRIES = 3               # 最大重试次数
@@ -615,3 +615,104 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
             client.command(f'DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}')
         except Exception:
             pass  # 忽略清理时的错误
+
+# =============================================================================
+# 论文获取函数
+# =============================================================================
+
+def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
+    """获取指定日期的所有论文
+
+    Args:
+        date_str: 日期字符串 (YYYY-MM-DD)
+        progress_data: 进度数据
+        ch_client: ClickHouse 客户端
+
+    Returns:
+        是否成功并更新了进度
+    """
+    # 验证日期格式
+    try:
+        datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+        log_message(f"❌ Invalid date format: {date_str}", "ERROR")
+        return False
+
+    log_message(f"📅 正在获取: {date_str}")
+
+    try:
+        all_papers = []
+        start = 0
+        per_page = PER_PAGE
+
+        # 构建查询参数（修复：移除 + 号，使用空格）
+        date_key = date_to_key(date_str)
+        search_query = f"lastUpdatedDate:[{date_key} TO {date_key}]"
+
+        # 分页获取
+        while True:
+            # 构建请求参数
+            params = {
+                "search_query": search_query,
+                "start": start,
+                "max_results": per_page
+            }
+
+            # 发送请求
+            xml_data = make_request(ARXIV_API_BASE, params)
+
+            if xml_data is None:
+                log_message(f"❌ {date_str}: 获取数据失败", "ERROR")
+                return False
+
+            # 解析 XML
+            papers = parse_arxiv_xml(xml_data)
+
+            if not papers:
+                # 没有更多数据
+                break
+
+            all_papers.extend(papers)
+            log_message(f"  📄 第 {start // per_page + 1} 页: 获取 {len(papers)} 篇论文")
+
+            # 检查是否是最后一页
+            if len(papers) < per_page:
+                break
+
+            start += per_page
+            time.sleep(REQUEST_INTERVAL)
+
+        if not all_papers:
+            log_message(f"⚠️  {date_str}: 没有论文数据", "WARNING")
+            return False
+
+        # 转换为数据库行
+        rows = []
+        for paper in all_papers:
+            paper_rows = paper_to_rows(paper)
+            rows.extend(paper_rows)
+
+        # 批量插入
+        if rows:
+            # 分批写入（每 BATCH_WRITE_THRESHOLD 行）
+            for i in range(0, len(rows), BATCH_WRITE_THRESHOLD):
+                batch = rows[i:i + BATCH_WRITE_THRESHOLD]
+                success = batch_insert_clickhouse(ch_client, batch)
+
+                if not success:
+                    log_message(f"❌ {date_str}: 数据库插入失败", "ERROR")
+                    return False
+
+                log_message(f"  💾 已写入 {len(batch)} 行")
+
+        # 全部成功，更新进度（修复：添加重复检查）
+        if date_key not in progress_data['completed_dates']:
+            progress_data['completed_dates'].append(date_key)
+        save_progress(progress_data)
+
+        log_message(f"✅ {date_str}: 完成 {len(all_papers)} 篇论文 → {len(rows)} 行")
+        return True
+
+    except Exception as e:
+        log_message(f"❌ {date_str}: 处理异常 - {e}", "ERROR")
+        return False
