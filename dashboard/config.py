@@ -14,8 +14,8 @@ CLICKHOUSE_CONFIG = {
 # 数据表配置
 TABLES = {
     'openalex': 'OpenAlex',       # OpenAlex数据表
-    'semantic': 'semantic',       # Semantic Scholar数据表
-    'dblp': 'dblp'                # DBLP数据表
+    'semantic': 'semantic',        # Semantic Scholar数据表
+    'dblp': 'dblp'                 # DBLP数据表
 }
 
 # 默认数据表
