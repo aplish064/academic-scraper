@@ -167,6 +167,36 @@ def query_total_unique_papers():
         return 0
 
 
+def query_total_unique_authors():
+    """查询三个表的总唯一作者数（按author_name去重）"""
+    try:
+        client = get_ch_client()
+        if not client:
+            return 0
+
+        # 使用UNION ALL获取三个表的所有作者，然后去重
+        author_sql = """
+        SELECT uniqExact(author_name) as count
+        FROM (
+            SELECT author_id as author_name FROM OpenAlex WHERE author_id != ''
+            UNION ALL
+            SELECT author_id as author_name FROM semantic WHERE author_id != ''
+            UNION ALL
+            SELECT author_name FROM dblp WHERE author_name != ''
+        )
+        WHERE author_name != ''
+        SETTINGS max_execution_time=120
+        """
+
+        result = client.query(author_sql)
+        if result and result.result_rows:
+            return result.result_rows[0][0]
+        return 0
+    except Exception as e:
+        print(f"⚠️  查询总作者数失败: {e}")
+        return 0
+
+
 def try_merge_from_cache():
     """尝试从openalex和semantic缓存合并数据"""
     if not USE_CACHE or not redis_client:
