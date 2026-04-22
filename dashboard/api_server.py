@@ -138,7 +138,7 @@ def query_total_unique_journals():
 
 
 def query_total_unique_papers():
-    """查询三个表的总唯一论文数（DOI去重）"""
+    """查询三个表的总唯一论文数（DOI去重）- arxiv不参与（无DOI字段）"""
     try:
         client = get_ch_client()
         if not client:
@@ -168,13 +168,13 @@ def query_total_unique_papers():
 
 
 def query_total_unique_authors():
-    """查询三个表的总唯一作者数（按author_name去重）"""
+    """查询四个表的总唯一作者数（按author_name去重）"""
     try:
         client = get_ch_client()
         if not client:
             return 0
 
-        # 使用UNION ALL获取三个表的所有作者，然后去重
+        # 使用UNION ALL获取四个表的所有作者，然后去重
         author_sql = """
         SELECT uniqExact(author_name) as count
         FROM (
@@ -183,6 +183,8 @@ def query_total_unique_authors():
             SELECT author_id as author_name FROM semantic WHERE author_id != ''
             UNION ALL
             SELECT author_name FROM dblp WHERE author_name != ''
+            UNION ALL
+            SELECT author as author_name FROM arxiv WHERE author != ''
         )
         WHERE author_name != ''
         SETTINGS max_execution_time=120
@@ -198,13 +200,13 @@ def query_total_unique_authors():
 
 
 def query_total_unique_venues():
-    """查询三个表的总唯一期刊数（按venue/journal去重）"""
+    """查询四个表的总唯一期刊数（按venue/journal去重）"""
     try:
         client = get_ch_client()
         if not client:
             return 0
 
-        # 使用UNION ALL获取三个表的所有期刊，然后去重
+        # 使用UNION ALL获取四个表的所有期刊，然后去重
         venue_sql = """
         SELECT uniqExact(venue) as count
         FROM (
@@ -213,6 +215,8 @@ def query_total_unique_venues():
             SELECT journal as venue FROM semantic WHERE journal != ''
             UNION ALL
             SELECT venue FROM dblp WHERE venue != ''
+            UNION ALL
+            SELECT journal_ref as venue FROM arxiv WHERE journal_ref != ''
         )
         WHERE venue != ''
         SETTINGS max_execution_time=120
@@ -228,7 +232,7 @@ def query_total_unique_venues():
 
 
 def query_papers_by_date_union():
-    """跨数据源按日期统计论文数（DOI去重）"""
+    """跨数据源按日期统计论文数（DOI去重）- arxiv通过count()聚合"""
     try:
         client = get_ch_client()
         if not client:
@@ -449,16 +453,17 @@ def get_aggregated_data_arxiv():
 
 
 def try_merge_from_cache():
-    """尝试从openalex、semantic和dblp缓存合并数据"""
+    """尝试从openalex、semantic、dblp和arxiv缓存合并数据"""
     if not USE_CACHE or not redis_client:
         return None
 
-    # 获取openalex、semantic和dblp的缓存
+    # 获取openalex、semantic、dblp和arxiv的缓存
     openalex_cache = get_from_cache(get_cache_key('openalex'))
     semantic_cache = get_from_cache(get_cache_key('semantic'))
     dblp_cache = get_from_cache(get_cache_key('dblp'))
+    arxiv_cache = get_from_cache(get_cache_key('arxiv'))
 
-    # 检查三个缓存是否都存在且完整
+    # 检查openalex、semantic、dblp缓存是否都存在且完整
     if not openalex_cache or not semantic_cache or not dblp_cache:
         return None
 
@@ -491,7 +496,8 @@ def try_merge_from_cache():
             '_source_data': {
                 'openalex': openalex_cache,
                 'semantic': semantic_cache,
-                'dblp': dblp_cache
+                'dblp': dblp_cache,
+                'arxiv': arxiv_cache if arxiv_cache else {}
             }
         }
 
@@ -504,6 +510,11 @@ def try_merge_from_cache():
 
         for date, count in dblp_cache.get('papers_by_date', {}).items():
             merged_data['papers_by_date'][date] = merged_data['papers_by_date'].get(date, 0) + count
+
+        # 合并arxiv的papers_by_date
+        if arxiv_cache:
+            for date, count in arxiv_cache.get('papers_by_date', {}).items():
+                merged_data['papers_by_date'][date] = merged_data['papers_by_date'].get(date, 0) + count
 
         # 合并引用数分布
         for range_key, count in openalex_cache.get('citations_distribution', {}).items():
