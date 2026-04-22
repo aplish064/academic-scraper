@@ -26,14 +26,14 @@
 **文件:**
 - 修改: `dashboard/config.py:15-19`
 
-- [ ] **步骤1: 备份原配置文件**
+- [x] **步骤1: 备份原配置文件**
 
 ```bash
 cd /home/hkustgz/Us/academic-scraper/dashboard
 cp config.py config.py.backup
 ```
 
-- [ ] **步骤2: 在TABLES字典中添加arxiv配置**
+- [x] **步骤2: 在TABLES字典中添加arxiv配置**
 
 在 `config.py` 的 `TABLES` 字典中添加arxiv条目：
 
@@ -47,7 +47,7 @@ TABLES = {
 }
 ```
 
-- [ ] **步骤3: 验证配置语法**
+- [x] **步骤3: 验证配置语法**
 
 ```bash
 cd /home/hkustgz/Us/academic-scraper/dashboard
@@ -56,7 +56,7 @@ cd /home/hkustgz/Us/academic-scraper/dashboard
 
 预期输出: `TABLES: {'openalex': 'OpenAlex', 'semantic': 'semantic', 'dblp': 'dblp', 'arxiv': 'arxiv'}`
 
-- [ ] **步骤4: 提交配置修改**
+- [x] **步骤4: 提交配置修改**
 
 ```bash
 git add config.py
