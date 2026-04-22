@@ -716,3 +716,143 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
     except Exception as e:
         log_message(f"❌ {date_str}: 处理异常 - {e}", "ERROR")
         return False
+
+# =============================================================================
+# 主执行流程
+# =============================================================================
+
+class ArxivFetcher:
+    """arXiv 论文获取器"""
+
+    def __init__(self, start_date: str, end_year: int, ch_client=None):
+        """初始化
+
+        Args:
+            start_date: 开始日期 (YYYY-MM-DD)
+            end_year: 结束年份
+            ch_client: ClickHouse 客户端（可选）
+        """
+        self.start_date = start_date
+        self.end_year = end_year
+        self.ch_client = ch_client or create_clickhouse_client()
+        self.progress = load_progress()
+
+    def run(self):
+        """执行主流程"""
+        start_time = time.time()
+
+        log_message("=" * 60)
+        log_message("arXiv 论文获取工具")
+        log_message("=" * 60)
+        log_message(f"开始日期: {self.start_date}")
+        log_message(f"结束年份: {self.end_year}")
+        log_message(f"请求间隔: {REQUEST_INTERVAL} 秒")
+        log_message(f"每页论文数: {PER_PAGE}")
+        log_message("=" * 60)
+
+        # 创建表
+        if not self.ch_client:
+            log_message("❌ 无法连接到 ClickHouse", "ERROR")
+            return
+
+        create_arxiv_table(self.ch_client)
+
+        # 生成日期列表
+        all_dates = get_all_dates_backward(self.start_date, self.end_year)
+        self.progress['total_dates'] = len(all_dates)
+
+        # 过滤已完成的日期
+        pending_dates = [
+            d for d in all_dates
+            if date_to_key(d) not in self.progress['completed_dates']
+        ]
+
+        log_message(f"总日期数: {len(all_dates)}")
+        log_message(f"已完成: {len(all_dates) - len(pending_dates)}")
+        log_message(f"待处理: {len(pending_dates)}")
+        log_message("=" * 60)
+
+        if not pending_dates:
+            log_message("✅ 所有日期已完成！")
+            return
+
+        # 统计信息
+        stats = {
+            'successful_dates': 0,
+            'failed_dates': 0
+        }
+
+        # 使用 tqdm 显示进度
+        with tqdm(total=len(pending_dates), desc="日期进度", unit="天", ncols=80) as pbar:
+            for date_str in pending_dates:
+                success = fetch_papers_by_date(date_str, self.progress, self.ch_client)
+
+                if success:
+                    stats['successful_dates'] += 1
+                else:
+                    stats['failed_dates'] += 1
+
+                pbar.update(1)
+                pbar.set_postfix_str(f"成功:{stats['successful_dates']} 失败:{stats['failed_dates']}")
+
+        # 刷新日志
+        flush_log_buffer()
+
+        # 打印最终统计
+        elapsed_time = time.time() - start_time
+
+        log_message("=" * 60)
+        log_message("🎉 arXiv 论文获取完成！")
+        log_message("=" * 60)
+        log_message(f"📊 统计信息:")
+        log_message(f"   - 成功日期: {stats['successful_dates']} 天")
+        log_message(f"   - 失败日期: {stats['failed_dates']} 天")
+        log_message(f"   - 总耗时: {elapsed_time/60:.1f} 分钟")
+        log_message(f"💾 数据已写入: {CH_DATABASE}.{CH_TABLE}")
+        log_message(f"📝 日志文件: {LOG_FILE}")
+        log_message("=" * 60)
+
+
+def main():
+    """主函数"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description='arXiv 论文获取工具')
+    parser.add_argument('--start-date', default=START_DATE,
+                       help='开始日期 (格式: YYYY-MM-DD)')
+    parser.add_argument('--end-year', type=int, default=END_YEAR,
+                       help='结束年份')
+    parser.add_argument('--interval', type=float, default=REQUEST_INTERVAL,
+                       help='请求间隔（秒）')
+    parser.add_argument('--per-page', type=int, default=PER_PAGE,
+                       help='每页论文数')
+    parser.add_argument('--dry-run', action='store_true',
+                       help='试运行模式，不写入数据库')
+
+    args = parser.parse_args()
+
+    # 设置日志
+    setup_logging()
+
+    try:
+        # 创建 fetcher
+        fetcher = ArxivFetcher(args.start_date, args.end_year)
+
+        # 运行
+        fetcher.run()
+
+    except KeyboardInterrupt:
+        log_message("\n⚠️  用户中断")
+        log_message("💾 进度已保存，下次运行将从中断处继续")
+
+    except Exception as e:
+        log_message(f"\n❌ 发生错误: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        flush_log_buffer()
+
+
+if __name__ == '__main__':
+    main()
