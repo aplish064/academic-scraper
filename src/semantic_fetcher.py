@@ -506,3 +506,112 @@ def batch_validate_journals(journal_list: List[Dict[str, Any]],
 
 # ============ 论文获取函数 ============
 
+
+# ============ 论文获取函数 ============
+
+def fetch_papers_by_journal(journal_name: str, query_type: str,
+                           start_page: int, progress_data: dict,
+                           ch_client) -> Tuple[int, int]:
+    """获取指定期刊的所有论文
+
+    Args:
+        journal_name: 期刊名称
+        query_type: 查询类型 ("venue" or "query")
+        start_page: 起始页码
+        progress_data: 进度数据
+        ch_client: ClickHouse客户端
+
+    Returns:
+        tuple: (论文数, 行数)
+    """
+    log_message(f"开始获取期刊: {journal_name} (从第{start_page}页开始)")
+
+    seen_paper_ids = set()
+    total_papers = 0
+    current_page = start_page
+
+    while True:
+        # 检查页数限制
+        if MAX_PAGES_PER_JOURNAL and current_page >= MAX_PAGES_PER_JOURNAL:
+            log_message(f"  达到最大页数限制: {MAX_PAGES_PER_JOURNAL}")
+            break
+
+        # 构建请求参数
+        if query_type == "venue":
+            params = {
+                "venue": journal_name,
+                "limit": PAPERS_PER_REQUEST,
+                "offset": current_page * PAPERS_PER_REQUEST,
+                "fields": FIELDS
+            }
+        else:  # query
+            params = {
+                "query": journal_name,
+                "limit": PAPERS_PER_REQUEST,
+                "offset": current_page * PAPERS_PER_REQUEST,
+                "fields": FIELDS
+            }
+
+        # 发送请求
+        data = make_request(f"{BASE_URL}/paper/search", params)
+
+        if data is None:
+            log_message(f"  第{current_page}页请求失败", "WARNING")
+            break
+
+        papers = data.get("data", [])
+
+        if not papers:
+            log_message(f"  第{current_page}页无数据，获取完成")
+            break
+
+        # 过滤并收集论文
+        page_papers = []
+        for paper in papers:
+            paper_id = paper.get("paperId", "")
+            arxiv_id = paper.get("externalIds", {}).get("ArXiv", "")
+
+            # 过滤arxiv（与原逻辑一致）
+            if not arxiv_id and paper_id and paper_id not in seen_paper_ids:
+                seen_paper_ids.add(paper_id)
+                page_papers.append(paper)
+
+        if not page_papers:
+            log_message(f"  第{current_page}页无有效论文，获取完成")
+            break
+
+        # 插入数据库
+        rows = []
+        for paper in page_papers:
+            rows.extend(paper_to_rows(paper))
+
+        if rows and batch_insert_clickhouse(ch_client, rows):
+            total_papers += len(page_papers)
+
+            # 更新进度
+            update_journal_progress(
+                progress_data, journal_name,
+                status="in_progress",
+                current_page=current_page + 1,
+                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + len(page_papers)
+            )
+            save_progress(progress_data)
+
+            log_message(f"  第{current_page}页: 获取{len(page_papers)}篇论文, {len(rows)}行")
+        else:
+            log_message(f"  第{current_page}页插入失败", "ERROR")
+            break
+
+        current_page += 1
+        time.sleep(REQUEST_INTERVAL)
+
+    # 标记完成
+    update_journal_progress(
+        progress_data, journal_name,
+        status="completed",
+        total_pages=current_page
+    )
+    save_progress(progress_data)
+
+    log_message(f"✓ {journal_name}: 完成 {total_papers}篇论文")
+    return total_papers, len(rows) if total_papers > 0 else 0
