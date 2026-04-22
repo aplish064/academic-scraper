@@ -490,13 +490,25 @@
                 <div class="stat-label">机构数量</div>
                 <div class="stat-value" id="totalInstitutions">0</div>
             </div>
-            <div class="stat-card" id="highCitationsCard">
+            <div class="stat-card">
                 <div class="stat-label">高被引论文</div>
                 <div class="stat-value" id="highCitations">0</div>
             </div>
             <div class="stat-card" id="fwciCard" style="display: none;">
                 <div class="stat-label">平均FWCI</div>
                 <div class="stat-value" id="avgFwci">0</div>
+            </div>
+            <div class="stat-card" id="ccfClassCard" style="display: none;">
+                <div class="stat-label">CCF分类数</div>
+                <div class="stat-value" id="ccfClassCount">0</div>
+            </div>
+            <div class="stat-card" id="pubTypeCard" style="display: none;">
+                <div class="stat-label">出版物类型数</div>
+                <div class="stat-value" id="pubTypeCount">0</div>
+            </div>
+            <div class="stat-card" id="venueTypeCard" style="display: none;">
+                <div class="stat-label">场所类型数</div>
+                <div class="stat-value" id="venueTypeCount">0</div>
             </div>
         </div>
 
@@ -559,7 +571,7 @@
             </div>
 
             <!-- 引用分布 - 柱状图 -->
-            <div class="chart-card" id="citationDistCard">
+            <div class="chart-card">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">引用次数分布</div>
@@ -584,41 +596,39 @@
                 </div>
             </div>
 
-
-            <!-- DBLP特有图表 -->
-            <div class="chart-card" id="ccfDistCard" style="display: none;">
+            <div class="chart-card" id="ccfClassCard" style="display: none;">
                 <div class="chart-header">
                     <div>
-                        <div class="chart-title">CCF等级分布</div>
-                        <div class="chart-subtitle">计算机学会推荐期刊会议等级</div>
+                        <div class="chart-title">CCF 分类分布</div>
+                        <div class="chart-subtitle">计算机学会分类等级分布</div>
                     </div>
                 </div>
                 <div class="chart-body small">
-                    <canvas id="ccfDistChart"></canvas>
+                    <canvas id="ccfClassChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-card" id="pubTypeCard" style="display: none;">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">出版物类型分布</div>
+                        <div class="chart-subtitle">论文发表类型统计</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="pubTypeChart"></canvas>
                 </div>
             </div>
 
             <div class="chart-card" id="venueTypeCard" style="display: none;">
                 <div class="chart-header">
                     <div>
-                        <div class="chart-title">Venue类型分布</div>
+                        <div class="chart-title">场所类型分布</div>
                         <div class="chart-subtitle">发表场所类型统计</div>
                     </div>
                 </div>
                 <div class="chart-body small">
                     <canvas id="venueTypeChart"></canvas>
-                </div>
-            </div>
-
-            <div class="chart-card" id="yearTrendCard" style="display: none;">
-                <div class="chart-header">
-                    <div>
-                        <div class="chart-title">年份趋势</div>
-                        <div class="chart-subtitle">论文发表年份分布</div>
-                    </div>
-                </div>
-                <div class="chart-body small">
-                    <canvas id="yearTrendChart"></canvas>
                 </div>
             </div>
 
@@ -673,8 +683,7 @@
         function animateNumber(element, target, duration = 2000) {
             // 对于大数字（>100万）或非数字类型，直接显示结果避免性能问题
             if (typeof target !== 'number' || target > 1000000) {
-                const numTarget = typeof target === 'string' ? parseFloat(target) : target;
-                element.textContent = formatNumber(Math.round(numTarget));
+                element.textContent = formatNumber(Math.round(target));
                 return;
             }
 
@@ -739,10 +748,6 @@
 
                 // 根据数据源调整统计卡片布局
                 const statsGrid = document.querySelector('.stats-grid');
-                // DBLP数据源特殊处理
-                if (data.source === 'dblp') {
-                    statsGrid.classList.remove('openalex-compact');
-                }
                 if (data.source === 'openalex') {
                     statsGrid.classList.add('openalex-compact');
                 } else {
@@ -752,19 +757,10 @@
                 animateNumber(document.getElementById('totalPapers'), stats.total_papers);
                 animateNumber(document.getElementById('totalAuthors'), stats.unique_authors);
                 animateNumber(document.getElementById('totalJournals'), stats.unique_journals);
-
-                // 根据数据源更新期刊卡片标签
-                if (stats.unique_journals > 0) {
-                    const journalCard = document.getElementById('totalJournals').closest('.stat-card');
-                    const journalLabel = journalCard.querySelector('.stat-label');
-                    if (journalLabel) {
-                        journalLabel.textContent = data.source === 'dblp' ? 'Unique Venues' : '期刊数量';
-                    }
-                }
                 console.log('基础统计更新完成');
 
                 // 根据数据源显示/隐藏统计卡片
-                const isInstitutionsAvailable = stats.unique_institutions > 0 && (data.source === 'openalex' || data.source === 'semantic');
+                const isInstitutionsAvailable = stats.unique_institutions > 0 && data.source === 'openalex';
                 const institutionsCard = document.getElementById('institutionsCard');
                 if (institutionsCard) {
                     if (isInstitutionsAvailable) {
@@ -775,18 +771,7 @@
                     }
                 }
 
-                // 高被引论文卡片（DBLP无此数据，隐藏）
-                const highCitationsCard = document.getElementById('highCitationsCard');
-                if (highCitationsCard) {
-                    if (data.source === 'dblp') {
-                        highCitationsCard.style.display = 'none';
-                    } else {
-                        highCitationsCard.style.display = 'block';
-                        animateNumber(document.getElementById('highCitations'), stats.high_citations);
-                    }
-                }
-
-                const isFwciAvailable = stats.avg_fwci > 0 && (data.source === 'openalex' || data.source === 'semantic');
+                const isFwciAvailable = stats.avg_fwci > 0 && data.source === 'openalex';
                 const fwciCard = document.getElementById('fwciCard');
                 const fwciColumnHeader = document.getElementById('fwciColumnHeader');
                 if (fwciCard) {
@@ -800,46 +785,70 @@
                     }
                 }
 
+                // DBLP特有字段处理
+                const ccfClassCard = document.getElementById('ccfClassCard');
+                const pubTypeCard = document.getElementById('pubTypeCard');
+                const venueTypeCard = document.getElementById('venueTypeCard');
+
+                if (data.source === 'dblp') {
+                    // 显示DBLP特有卡片
+                    if (ccfClassCard) {
+                        ccfClassCard.style.display = 'block';
+                        const ccfCount = Object.keys(data.ccf_class_distribution || {}).length;
+                        document.getElementById('ccfClassCount').textContent = ccfCount;
+                    }
+                    if (pubTypeCard) {
+                        pubTypeCard.style.display = 'block';
+                        const pubTypeCount = Object.keys(data.publication_type_distribution || {}).length;
+                        document.getElementById('pubTypeCount').textContent = pubTypeCount;
+                    }
+                    if (venueTypeCard) {
+                        venueTypeCard.style.display = 'block';
+                        const venueTypeCount = Object.keys(data.venue_type_distribution || {}).length;
+                        document.getElementById('venueTypeCount').textContent = venueTypeCount;
+                    }
+                } else {
+                    // 隐藏DBLP特有卡片
+                    if (ccfClassCard) ccfClassCard.style.display = 'none';
+                    if (pubTypeCard) pubTypeCard.style.display = 'none';
+                    if (venueTypeCard) venueTypeCard.style.display = 'none';
+                }
+
                 // 根据数据源显示/隐藏图表卡片
                 const countryCard = document.getElementById('countryCard');
                 const instTypeCard = document.getElementById('instTypeCard');
                 const fwciDistCard = document.getElementById('fwciDistCard');
+                const ccfClassCard = document.getElementById('ccfClassCard');
+                const pubTypeCard = document.getElementById('pubTypeCard');
+                const venueTypeCard = document.getElementById('venueTypeCard');
 
-                // 只在OpenAlex数据源时显示这些图表，semantic和dblp都隐藏
+                // 只在OpenAlex数据源时显示这些图表，semantic和全部数据都隐藏
                 if (data.source === 'openalex') {
                     if (countryCard) countryCard.style.display = 'block';
                     if (instTypeCard) instTypeCard.style.display = 'block';
                     if (fwciDistCard) fwciDistCard.style.display = 'block';
-                } else {
-                    // Semantic和DBLP数据源隐藏这些图表
+                    if (ccfClassCard) ccfClassCard.style.display = 'none';
+                    if (pubTypeCard) pubTypeCard.style.display = 'none';
+                    if (venueTypeCard) venueTypeCard.style.display = 'none';
+                } else if (data.source === 'dblp') {
+                    // DBLP数据源显示特有图表
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
-                }
-
-                // 根据数据源显示/隐藏图表卡片
-                const citationDistCard = document.getElementById('citationDistCard');
-                const ccfDistCard = document.getElementById('ccfDistCard');
-                const venueTypeCard = document.getElementById('venueTypeCard');
-                const yearTrendCard = document.getElementById('yearTrendCard');
-
-                if (data.source === 'dblp') {
-                    // DBLP: 隐藏引用数分布和年份趋势卡片，显示DBLP特有图表
-                    if (citationDistCard) citationDistCard.style.display = 'none';
-                    if (yearTrendCard) yearTrendCard.style.display = 'none';
-                    if (ccfDistCard && data.author_types && Object.keys(data.author_types).length > 0) {
-                        ccfDistCard.style.display = 'block';
-                    }
-                    if (venueTypeCard && data.venue_type_distribution && Object.keys(data.venue_type_distribution).length > 0) {
-                        venueTypeCard.style.display = 'block';
-                    }
+                    if (ccfClassCard) ccfClassCard.style.display = 'block';
+                    if (pubTypeCard) pubTypeCard.style.display = 'block';
+                    if (venueTypeCard) venueTypeCard.style.display = 'block';
                 } else {
-                    // 非DBLP数据源: 显示引用数分布和年份趋势卡片，隐藏DBLP特有图表
-                    if (citationDistCard) citationDistCard.style.display = 'block';
-                    if (yearTrendCard) yearTrendCard.style.display = 'block';
-                    if (ccfDistCard) ccfDistCard.style.display = 'none';
-                    if (venueTypeCard) venueTypeCard.style.display = 'none';
+                    // 全部数据源：显示OpenAlex图表 + DBLP特有图表
+                    if (countryCard) countryCard.style.display = 'none';
+                    if (instTypeCard) instTypeCard.style.display = 'none';
+                    if (fwciDistCard) fwciDistCard.style.display = 'none';
+                    if (ccfClassCard) ccfClassCard.style.display = 'block';
+                    if (pubTypeCard) pubTypeCard.style.display = 'block';
+                    if (venueTypeCard) venueTypeCard.style.display = 'block';
                 }
+
+                animateNumber(document.getElementById('highCitations'), stats.high_citations);
 
                 // Update timestamps and data source info
                 const now = new Date();
@@ -852,18 +861,10 @@
 
                 // 创建图表（根据数据源选择性创建）
                 const chartsToCreate = [
+                    createPapersTrendChartFromAggregated(data.papers_by_date),
+                    createCitationDistChartFromAggregated(data.citations_distribution),
                     createJournalDistChartFromAggregated(data.top_journals)
                 ];
-
-                // 年份趋势图表（DBLP无此数据，跳过）
-                if (data.source !== 'dblp') {
-                    chartsToCreate.push(createPapersTrendChartFromAggregated(data.papers_by_date));
-                }
-
-                // 引用数分布图表（DBLP无此数据，跳过）
-                if (data.source !== 'dblp') {
-                    chartsToCreate.push(createCitationDistChartFromAggregated(data.citations_distribution));
-                }
 
                 // 只为OpenAlex创建的图表（全部数据和semantic都不显示这些图表）
                 if (data.source === 'openalex') {
@@ -878,21 +879,29 @@
                     }
                 }
 
-                // DBLP特有图表
+                // 为DBLP创建的图表
                 if (data.source === 'dblp') {
-                    // CCF等级分布（饼图）
-                    if (data.author_types && Object.keys(data.author_types).length > 0) {
-                        chartsToCreate.push(createCcfDistChartFromAggregated(data.author_types));
+                    if (Object.keys(data.ccf_class_distribution || {}).length > 0) {
+                        chartsToCreate.push(createCcfClassChartFromAggregated(data.ccf_class_distribution));
                     }
-
-                    // Venue类型分布（饼图）
-                    if (data.venue_type_distribution && Object.keys(data.venue_type_distribution).length > 0) {
+                    if (Object.keys(data.publication_type_distribution || {}).length > 0) {
+                        chartsToCreate.push(createPubTypeChartFromAggregated(data.publication_type_distribution));
+                    }
+                    if (Object.keys(data.venue_type_distribution || {}).length > 0) {
                         chartsToCreate.push(createVenueTypeChartFromAggregated(data.venue_type_distribution));
                     }
+                }
 
-                    // 年份趋势（折线图）
-                    if (data.papers_by_date && Object.keys(data.papers_by_date).length > 0) {
-                        chartsToCreate.push(createYearTrendChartFromAggregated(data.papers_by_date));
+                // 为全部数据创建的图表（包含DBLP特有字段）
+                if (data.source === 'all') {
+                    if (Object.keys(data.ccf_class_distribution || {}).length > 0) {
+                        chartsToCreate.push(createCcfClassChartFromAggregated(data.ccf_class_distribution));
+                    }
+                    if (Object.keys(data.publication_type_distribution || {}).length > 0) {
+                        chartsToCreate.push(createPubTypeChartFromAggregated(data.publication_type_distribution));
+                    }
+                    if (Object.keys(data.venue_type_distribution || {}).length > 0) {
+                        chartsToCreate.push(createVenueTypeChartFromAggregated(data.venue_type_distribution));
                     }
                 }
 
@@ -1227,6 +1236,84 @@
                         label: '论文数量',
                         data: counts,
                         backgroundColor: '#3b82f6'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // 创建CCF分类分布图（DBLP特有）
+        function createCcfClassChartFromAggregated(ccfDist) {
+            const labels = Object.keys(ccfDist);
+            const counts = Object.values(ccfDist);
+
+            if (charts.ccfClass) charts.ccfClass.destroy();
+
+            const ctx = document.getElementById('ccfClassChart').getContext('2d');
+            charts.ccfClass = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: ['#10b981', '#3b82f6', '#f59e0b']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // 创建出版物类型分布图（DBLP特有）
+        function createPubTypeChartFromAggregated(pubTypeDist) {
+            const labels = Object.keys(pubTypeDist);
+            const counts = Object.values(pubTypeDist);
+
+            if (charts.pubType) charts.pubType.destroy();
+
+            const ctx = document.getElementById('pubTypeChart').getContext('2d');
+            charts.pubType = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: '#8b5cf6'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // 创建场所类型分布图（DBLP特有）
+        function createVenueTypeChartFromAggregated(venueTypeDist) {
+            const labels = Object.keys(venueTypeDist);
+            const counts = Object.values(venueTypeDist);
+
+            if (charts.venueType) charts.venueType.destroy();
+
+            const ctx = document.getElementById('venueTypeChart').getContext('2d');
+            charts.venueType = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '论文数量',
+                        data: counts,
+                        backgroundColor: ['#ec4899', '#14b8a6', '#f97316', '#84cc16']
                     }]
                 },
                 options: {
@@ -1825,104 +1912,6 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: { y: { beginAtZero: true } }
-                }
-            });
-        }
-
-        // CCF等级分布图表（DBLP特有）
-        function createCcfDistChartFromAggregated(ccfDist) {
-            const labels = Object.keys(ccfDist);
-            const data = Object.values(ccfDist);
-
-            if (charts.ccfDist) charts.ccfDist.destroy();
-
-            const ctx = document.getElementById('ccfDistChart').getContext('2d');
-            charts.ccfDist = new Chart(ctx, {
-                type: 'pie',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        data: data,
-                        backgroundColor: ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6']
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'right'
-                        }
-                    }
-                }
-            });
-        }
-
-        // Venue类型分布图表（DBLP特有）
-        function createVenueTypeChartFromAggregated(venueTypes) {
-            const labels = Object.keys(venueTypes);
-            const data = Object.values(venueTypes);
-
-            if (charts.venueType) charts.venueType.destroy();
-
-            const ctx = document.getElementById('venueTypeChart').getContext('2d');
-            charts.venueType = new Chart(ctx, {
-                type: 'pie',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        data: data,
-                        backgroundColor: ['#8b5cf6', '#ec4899', '#14b8a6', '#f59e0b']
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'right'
-                        }
-                    }
-                }
-            });
-        }
-
-        // 年份趋势图表（DBLP特有，从聚合数据创建）
-        function createYearTrendChartFromAggregated(papersByDate) {
-            // 将年份对象转换为数组并排序
-            const sortedEntries = Object.entries(papersByDate)
-                .sort((a, b) => a[0].localeCompare(b[0]));
-
-            const labels = sortedEntries.map(e => e[0]);
-            const data = sortedEntries.map(e => e[1]);
-
-            if (charts.yearTrend) charts.yearTrend.destroy();
-
-            const ctx = document.getElementById('yearTrendChart').getContext('2d');
-            charts.yearTrend = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: '论文数量',
-                        data: data,
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        fill: true,
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true
-                        }
-                    }
                 }
             });
         }
