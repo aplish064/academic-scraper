@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 # API 配置
 ARXIV_API_BASE = "https://export.arxiv.org/api/query"
-REQUEST_INTERVAL = 1.0        # 请求间隔（秒）
+REQUEST_INTERVAL = 1.0        # 请求间隔（秒）- 增加以避免速率限制
 REQUEST_TIMEOUT = 30          # 请求超时（秒）
 MAX_RETRIES = 3               # 最大重试次数
 PER_PAGE = 3000              # 每页论文数
@@ -30,7 +30,7 @@ RATE_LIMIT_WAIT = 60          # 速率限制等待时间（秒）
 TIMEOUT_RETRY_WAIT = 5        # 超时重试等待时间（秒）
 
 # 时间范围配置
-START_DATE = "2026-04-22"     # 开始日期
+START_DATE = "2026-04-22"     # 开始日期 - 改为历史日期
 END_YEAR = 1990               # 结束年份
 
 # ClickHouse 配置

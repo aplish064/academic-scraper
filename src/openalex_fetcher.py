@@ -24,8 +24,8 @@ from tqdm.asyncio import tqdm
 OPENALEX_API_BASE = "https://api.openalex.org"
 
 # API 配置
-OPENALEX_API_KEY = "2ZiX5542GoZp9VYwHv2jPj"  # 您的 API Key
-OPENALEX_EMAIL = "17818151056@163.com"  # 您的邮箱
+OPENALEX_API_KEY = "Q5QcudPogcFTfvV7vFOH1r"  # 您的 API Key
+OPENALEX_EMAIL = "1509901785@qq.com"  # 您的邮箱
 
 # ClickHouse 配置
 CH_HOST = 'localhost'
@@ -42,7 +42,7 @@ PROGRESS_FILE = os.path.join(LOG_DIR, "openalex_fetch_progress.json")
 
 # 配置
 START_DATE = "20260410"  # 从这个日期开始往前获取
-END_YEAR = 2010          # 往前获取到这一年
+END_YEAR = 1936          # 往前获取到这一年
 
 # 并发配置
 MAX_CONCURRENT_REQUESTS = 30  # 最大并发请求数（降低以减少内存占用）
