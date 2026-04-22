@@ -2,6 +2,7 @@
 import time
 from typing import Dict, Any
 from lxml import etree
+from .ccf_mapping import get_ccf_classification
 
 
 class XMLStreamingParser:
@@ -114,12 +115,34 @@ class XMLStreamingParser:
         publisher_elem = element.find('publisher')
         publisher = publisher_elem.text if publisher_elem is not None else None
 
+        # Infer venue_type from XML element tag
+        venue_type = 'unknown'
+        if element.tag == 'inproceedings':
+            venue_type = 'conference'
+        elif element.tag == 'article':
+            venue_type = 'journal'
+        elif element.tag in ['proceedings', 'book']:
+            venue_type = 'book'
+        elif element.tag in ['phdthesis', 'mastersthesis']:
+            venue_type = 'thesis'
+        elif element.tag == 'incollection':
+            venue_type = 'book_chapter'
+
+        # Get CCF classification from venue name
+        ccf_class = None
+        if venue:
+            ccf_info = get_ccf_classification(venue)
+            if ccf_info:
+                ccf_class = ccf_info["ccf_class"]
+
         return {
             'paper_id': paper_id,
             'authors': authors,
             'title': title,
             'year': year,
             'venue': venue,  # Extracted from journal or booktitle based on element type
+            'venue_type': venue_type,  # Inferred from XML element tag
+            'ccf_class': ccf_class,  # CCF classification from venue name
             'doi': doi,  # Extracted from ee tag URLs
             'ee': ee,
             'volume': volume,

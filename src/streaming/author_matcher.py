@@ -146,8 +146,8 @@ class StreamingAuthorMatcher:
                 safe_str(paper_data.get('year')),  # year
                 safe_str(paper_data.get('publication_date')),  # publication_date (year+month)
                 safe_str(paper_data.get('venue')),  # venue (from XML)
-                '',  # venue_type
-                '',  # ccf_class
+                safe_str(paper_data.get('venue_type')),  # venue_type (inferred from XML element tag)
+                safe_str(paper_data.get('ccf_class')),  # ccf_class (from venue name matching)
                 author_pid,  # author_pid (generated from paper_id + rank)
                 safe_str(author_name),  # author_name
                 safe_str(csrankings_info.get('orcid')),  # author_orcid

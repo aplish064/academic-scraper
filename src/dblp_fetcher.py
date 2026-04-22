@@ -27,6 +27,7 @@ from streaming import (
     StreamingAuthorMatcher,
     XMLStreamingParser
 )
+from streaming.ccf_mapping import get_ccf_classification
 
 
 # =============================================================================
@@ -464,6 +465,26 @@ class DBLPStreamingFetcher:
         school_elem = element.find('school')
         school = school_elem.text if school_elem is not None else None
 
+        # Infer venue_type from XML element tag
+        venue_type = 'unknown'
+        if element.tag == 'inproceedings':
+            venue_type = 'conference'
+        elif element.tag == 'article':
+            venue_type = 'journal'
+        elif element.tag in ['proceedings', 'book']:
+            venue_type = 'book'
+        elif element.tag in ['phdthesis', 'mastersthesis']:
+            venue_type = 'thesis'
+        elif element.tag == 'incollection':
+            venue_type = 'book_chapter'
+
+        # Get CCF classification from venue name
+        ccf_class = None
+        if venue:
+            ccf_info = get_ccf_classification(venue)
+            if ccf_info:
+                ccf_class = ccf_info["ccf_class"]
+
         return {
             'paper_id': paper_id,
             'authors': authors,
@@ -471,6 +492,8 @@ class DBLPStreamingFetcher:
             'year': year,
             'publication_date': publication_date,
             'venue': venue,
+            'venue_type': venue_type,  # Inferred from XML element tag
+            'ccf_class': ccf_class,  # CCF classification from venue name
             'doi': doi,
             'ee': ee,
             'url': url,
