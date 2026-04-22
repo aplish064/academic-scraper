@@ -224,3 +224,97 @@ def make_request(url: str, params: dict) -> Optional[str]:
     # 达到最大重试次数
     log_message("❌ 达到最大重试次数", "ERROR")
     return None
+
+# =============================================================================
+# XML 解析器
+# =============================================================================
+
+def parse_arxiv_xml(xml_data: str) -> List[Dict[str, Any]]:
+    """解析 arXiv API 返回的 Atom XML
+
+    Args:
+        xml_data: XML 字符串
+
+    Returns:
+        论文列表
+    """
+    if not xml_data:
+        return []
+
+    try:
+        feed = feedparser.parse(xml_data)
+        if not hasattr(feed, 'entries'):
+            return []
+        papers = []
+
+        for entry in feed.entries:
+            # 验证必需字段
+            if not hasattr(entry, 'id') or not hasattr(entry, 'title'):
+                log_message("跳过无效论文: 缺少必需字段", "WARNING")
+                continue
+
+            # 提取 arXiv ID
+            arxiv_id = entry.id.split('/')[-1]
+
+            # 提取作者和机构
+            authors = []
+            if hasattr(entry, 'authors'):
+                for author in entry.authors:
+                    author_info = {
+                        'name': author.get('name', ''),
+                        'affiliation': ''
+                    }
+
+                    # 提取机构信息
+                    if hasattr(author, 'arxiv_affiliation'):
+                        author_info['affiliation'] = author.arxiv_affiliation
+
+                    authors.append(author_info)
+
+            # 提取分类
+            categories = []
+            if hasattr(entry, 'tags'):
+                for tag in entry.tags:
+                    if hasattr(tag, 'term'):
+                        categories.append(tag.term)
+
+            # 提取主分类
+            primary_category = ''
+            if hasattr(entry, 'arxiv_primary_category'):
+                primary_category = entry.arxiv_primary_category.get('term', '')
+            elif categories:
+                primary_category = categories[0]
+
+            # 提取链接
+            url = ''
+            pdf_url = ''
+            if hasattr(entry, 'links'):
+                for link in entry.links:
+                    if link.get('rel') == 'alternate' and link.get('type') == 'text/html':
+                        url = link.get('href', '')
+                    elif link.get('type') == 'application/pdf':
+                        pdf_url = link.get('href', '')
+
+            # 构建论文对象
+            paper = {
+                'arxiv_id': arxiv_id,
+                'uid': entry.id,
+                'title': entry.title,
+                'published': entry.published if hasattr(entry, 'published') else '',
+                'updated': entry.updated if hasattr(entry, 'updated') else '',
+                'authors': authors,
+                'categories': categories,
+                'primary_category': primary_category,
+                'url': url,
+                'pdf_url': pdf_url,
+                'journal_ref': getattr(entry, 'arxiv_journal_ref', ''),
+                'comment': getattr(entry, 'arxiv_comment', '')
+            }
+
+            papers.append(paper)
+
+        return papers
+
+    except Exception as e:
+        log_message(f"XML 解析错误: {e}", "ERROR")
+        return []
