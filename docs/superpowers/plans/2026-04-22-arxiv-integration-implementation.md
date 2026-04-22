@@ -213,7 +213,7 @@ git commit -m "feat: add query_arxiv_statistics() function"
 **文件:**
 - 修改: `dashboard/api_server.py` (在query_arxiv_statistics()函数后添加)
 
-- [ ] **步骤1: 编写测试验证分类数据查询**
+- [x] **步骤1: 编写测试验证分类数据查询**
 
 ```bash
 cd /home/hkustgz/Us/academic-scraper
@@ -242,7 +242,7 @@ for row in result.result_rows:
 
 预期输出: 显示前5个主要分类及其论文数量
 
-- [ ] **步骤2: 在api_server.py中添加query_arxiv_category_distribution()函数**
+- [x] **步骤2: 在api_server.py中添加query_arxiv_category_distribution()函数**
 
 在 `query_arxiv_statistics()` 函数后添加：
 
@@ -279,7 +279,7 @@ def query_arxiv_category_distribution():
         return {}
 ```
 
-- [ ] **步骤3: 测试query_arxiv_category_distribution()函数**
+- [x] **步骤3: 测试query_arxiv_category_distribution()函数**
 
 ```bash
 cd /home/hkustgz/Us/academic-scraper/dashboard
@@ -305,7 +305,7 @@ print('✓ All assertions passed!')
 
 预期输出: 显示分类数量和前5个分类，断言通过
 
-- [ ] **步骤4: 提交代码**
+- [x] **步骤4: 提交代码**
 
 ```bash
 git add api_server.py
