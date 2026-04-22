@@ -115,3 +115,54 @@ def flush_log_buffer():
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.writelines(log_buffer)
         log_buffer.clear()
+
+# =============================================================================
+# 进度管理
+# =============================================================================
+
+def load_progress() -> Dict[str, Any]:
+    """加载进度文件"""
+    if PROGRESS_FILE.exists():
+        try:
+            with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            log_message("进度文件损坏，创建新文件", "WARNING")
+            return get_empty_progress()
+        except Exception as e:
+            log_message(f"加载进度文件失败: {e}", "ERROR")
+            return get_empty_progress()
+    return get_empty_progress()
+
+
+def get_empty_progress() -> Dict[str, Any]:
+    """返回空的进度结构"""
+    return {
+        "start_date": START_DATE,
+        "end_year": END_YEAR,
+        "total_dates": 0,
+        "completed_dates": [],
+        "last_updated": None
+    }
+
+
+def save_progress(progress: Dict[str, Any]):
+    """保存进度文件"""
+    try:
+        progress['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(progress, f, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        log_message(f"保存进度文件失败: {e}", "ERROR")
+
+
+def date_to_key(date_str: str) -> str:
+    """将日期字符串转换为进度文件键 (YYYYMMDD)"""
+    return date_str.replace('-', '')
+
+
+def key_to_date(key: str) -> str:
+    """将进度文件键转换为日期字符串 (YYYY-MM-DD)"""
+    return f"{key[:4]}-{key[4:6]}-{key[6:]}"
