@@ -471,13 +471,13 @@ def validate_journal(journal_name: str) -> Dict[str, Any]:
 
 def batch_validate_journals(journal_list: List[Dict[str, Any]],
                            progress_data: dict) -> Dict[str, Dict[str, Any]]:
-    """批量验证期刊
+    """批量验证期刊（跳过API验证，直接标记为有效）
 
     Returns:
         dict: {journal_name: {"query_type": str, "status": str}}
     """
-    log_message("开始批量验证期刊")
-    print("\n🔍 验证期刊有效性...")
+    log_message("跳过验证，直接标记所有期刊为有效")
+    print("\n📋 标记期刊为有效...")
 
     validated = {}
 
@@ -491,46 +491,27 @@ def batch_validate_journals(journal_list: List[Dict[str, Any]],
                 existing = progress_data["journals"][journal_name]
                 if existing["status"] in ["valid", "completed", "in_progress"]:
                     validated[journal_name] = {
-                        "query_type": existing.get("query_type"),
+                        "query_type": existing.get("query_type", "query"),
                         "status": existing["status"]
                     }
                     pbar.update(1)
                     continue
 
-            # 验证期刊
-            result = validate_journal(journal_name)
-
-            if result["valid"]:
-                validated[journal_name] = {
-                    "query_type": result["query_type"],
-                    "status": "valid"
-                }
-                update_journal_progress(
-                    progress_data, journal_name,
-                    status="valid",
-                    query_type=result["query_type"]
-                )
-            else:
-                update_journal_progress(
-                    progress_data, journal_name,
-                    status="failed",
-                    query_type=None,
-                    error=result.get("error", "Unknown error")
-                )
+            # 跳过验证，直接标记为有效，使用 query 方式
+            validated[journal_name] = {
+                "query_type": "query",
+                "status": "valid"
+            }
+            update_journal_progress(
+                progress_data, journal_name,
+                status="valid",
+                query_type="query"
+            )
 
             pbar.update(1)
-            pbar.set_postfix_str(f"有效:{len(validated)}个")
 
-            # 保存进度
-            save_progress(progress_data)
-            time.sleep(REQUEST_INTERVAL)
-
-    valid_count = len([j for j in validated.values()
-                      if j["status"] == "valid"])
-    failed_count = len(journal_list) - valid_count
-
-    print(f"   有效: {valid_count} 个 | 无效: {failed_count} 个")
-    log_message(f"验证完成: {valid_count} 有效, {failed_count} 无效")
+    print(f"   有效: {len(validated)} 个 | 无效: 0 个")
+    log_message(f"标记完成: {len(validated)} 个期刊全部标记为有效")
 
     return validated
 
