@@ -70,7 +70,7 @@ git commit -m "feat: add arxiv to TABLES configuration"
 **文件:**
 - 修改: `dashboard/api_server.py` (在文件末尾添加新函数，约在第1400行后)
 
-- [ ] **步骤1: 编写测试验证arxiv表数据**
+- [x] **步骤1: 编写测试验证arxiv表数据**
 
 ```bash
 cd /home/hkustgz/Us/academic-scraper
@@ -98,7 +98,7 @@ print('Date range:', result.result_rows[0])
 
 预期输出: 显示实际的论文数、作者数、分类数和时间范围
 
-- [ ] **步骤2: 在api_server.py中添加query_arxiv_statistics()函数**
+- [x] **步骤2: 在api_server.py中添加query_arxiv_statistics()函数**
 
 在 `api_server.py` 文件末尾添加以下函数：
 
@@ -175,7 +175,7 @@ def query_arxiv_statistics():
         }
 ```
 
-- [ ] **步骤3: 测试query_arxiv_statistics()函数**
+- [x] **步骤3: 测试query_arxiv_statistics()函数**
 
 ```bash
 cd /home/hkustgz/Us/academic-scraper/dashboard
@@ -199,7 +199,7 @@ print('✓ All assertions passed!')
 
 预期输出: 显示统计信息且断言通过
 
-- [ ] **步骤4: 提交代码**
+- [x] **步骤4: 提交代码**
 
 ```bash
 git add api_server.py
