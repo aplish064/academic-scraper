@@ -227,6 +227,51 @@ def query_total_unique_venues():
         return 0
 
 
+def query_papers_by_date_union():
+    """跨数据源按日期统计论文数（DOI去重）"""
+    try:
+        client = get_ch_client()
+        if not client:
+            return {}
+
+        date_sql = """
+        SELECT date, uniqExact(doi) as count
+        FROM (
+            SELECT
+                formatDateTime(toDateOrNull(publication_date), '%Y-%m') as date,
+                doi
+            FROM OpenAlex
+            WHERE publication_date != '' AND length(publication_date) > 0
+            UNION ALL
+            SELECT
+                formatDateTime(toDateOrNull(publication_date), '%Y-%m') as date,
+                doi
+            FROM semantic
+            WHERE publication_date != '' AND length(publication_date) > 0
+            UNION ALL
+            SELECT
+                formatDateTime(toDateOrNull(publication_date), '%Y-%m') as date,
+                doi
+            FROM dblp
+            WHERE publication_date != '' AND length(publication_date) > 0
+        )
+        WHERE date != ''
+        GROUP BY date
+        ORDER BY date DESC
+        SETTINGS max_execution_time=120
+        """
+
+        result = client.query(date_sql)
+        papers_by_date = {}
+        if result:
+            for row in result.result_rows:
+                papers_by_date[str(row[0])] = int(row[1])
+        return papers_by_date
+    except Exception as e:
+        print(f"⚠️  查询跨源按日期统计失败: {e}")
+        return {}
+
+
 def try_merge_from_cache():
     """尝试从openalex和semantic缓存合并数据"""
     if not USE_CACHE or not redis_client:
