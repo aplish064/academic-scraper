@@ -375,6 +375,36 @@ def query_arxiv_category_distribution():
         return {}
 
 
+def query_arxiv_papers_by_month():
+    """查询arxiv按月统计论文数"""
+    client = get_ch_client()
+    if not client:
+        return {}
+
+    try:
+        sql = """
+            SELECT
+                formatDateTime(published, '%Y-%m') as month,
+                count() as paper_count
+            FROM academic_db.arxiv
+            GROUP BY month
+            ORDER BY month ASC
+        """
+
+        result = client.query(sql)
+        papers_by_month = {}
+        if result.result_rows:
+            for row in result.result_rows:
+                month = str(row[0]) if row[0] else 'Unknown'
+                count = int(row[1]) if row[1] else 0
+                papers_by_month[month] = count
+
+        return papers_by_month
+    except Exception as e:
+        print(f"❌ 查询arxiv时间趋势失败: {e}")
+        return {}
+
+
 def try_merge_from_cache():
     """尝试从openalex、semantic和dblp缓存合并数据"""
     if not USE_CACHE or not redis_client:
