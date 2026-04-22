@@ -604,6 +604,10 @@ def get_aggregated_data():
     start_time = time.time()
     source = request.args.get('source', DEFAULT_TABLE)
 
+    # 如果是arxiv，调用专门的arxiv聚合函数
+    if source == 'arxiv':
+        return jsonify(get_aggregated_data_arxiv())
+
     # 检查缓存
     cache_key = get_cache_key(source)
     cached_data = get_from_cache(cache_key)
