@@ -2,6 +2,36 @@
 """
 Semantic Scholar Journal-Based Paper Fetcher
 从期刊表CSV获取所有期刊的论文
+
+Usage:
+    python src/semantic_fetcher.py
+
+Features:
+    - 从CSV文件加载期刊列表
+    - 验证期刊有效性（venue → query策略）
+    - 批量获取所有期刊的论文
+    - 支持断点续传（progress file）
+    - 自动去重并插入ClickHouse
+    - 实时进度显示和日志记录
+
+Configuration:
+    修改脚本顶部的配置参数：
+    - CSV_PATH: 期刊表CSV文件路径
+    - REQUEST_INTERVAL: API请求间隔（秒）
+    - MAX_PAGES_PER_JOURNAL: 每个期刊最大页数限制
+    - PAPERS_PER_REQUEST: 每次请求的论文数量
+
+Progress Tracking:
+    进度保存在 log/journal_progress.json
+    - journals: 每个期刊的状态（pending/valid/in_progress/completed/failed）
+    - 支持中断后继续执行
+    - 已完成的期刊会被跳过
+
+Data Flow:
+    1. 加载CSV → 2. 验证期刊 → 3. 获取论文 → 4. 插入数据库
+    - 使用venue优先查询，无结果时尝试query
+    - 过滤掉arxiv论文（与原逻辑一致）
+    - 每个作者一行，包含排名和标签（第一作者/最后作者/其他）
 """
 
 import requests
