@@ -318,3 +318,99 @@ def parse_arxiv_xml(xml_data: str) -> List[Dict[str, Any]]:
     except Exception as e:
         log_message(f"XML 解析错误: {e}", "ERROR")
         return []
+
+# =============================================================================
+# 数据转换器
+# =============================================================================
+
+def paper_to_rows(paper: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """将论文数据转换为数据库行（每个作者一行）
+
+    Args:
+        paper: 论文数据
+
+    Returns:
+        数据库行列表
+    """
+    rows = []
+
+    arxiv_id = paper.get('arxiv_id', '')
+    uid = paper.get('uid', '')
+    title = paper.get('title', '')
+
+    # 解析发布日期
+    published = None
+    published_str = paper.get('published', '')
+    if published_str:
+        try:
+            published = datetime.strptime(published_str, '%Y-%m-%dT%H:%M:%SZ').date()
+        except:
+            pass
+
+    # 解析更新时间
+    updated = None
+    updated_str = paper.get('updated', '')
+    if updated_str:
+        try:
+            updated = datetime.strptime(updated_str, '%Y-%m-%dT%H:%M:%SZ')
+        except:
+            pass
+
+    categories = paper.get('categories', [])
+    primary_category = paper.get('primary_category', '')
+    journal_ref = paper.get('journal_ref', '')
+    comment = paper.get('comment', '')
+    url = paper.get('url', '')
+    pdf_url = paper.get('pdf_url', '')
+
+    authors = paper.get('authors', [])
+
+    if not authors:
+        # 没有作者信息，添加一个空行
+        rows.append({
+            'arxiv_id': arxiv_id,
+            'uid': uid,
+            'title': title,
+            'published': published,
+            'updated': updated,
+            'categories': categories,
+            'primary_category': primary_category,
+            'journal_ref': journal_ref,
+            'comment': comment,
+            'url': url,
+            'pdf_url': pdf_url,
+            'author': '',
+            'rank': 0,
+            'tag': '其他',
+            'affiliation': ''
+        })
+    else:
+        total_authors = len(authors)
+        for rank, author in enumerate(authors, 1):
+            # 确定标签
+            if rank == 1:
+                tag = '第一作者'
+            elif rank == total_authors:
+                tag = '最后作者'
+            else:
+                tag = '其他'
+
+            rows.append({
+                'arxiv_id': arxiv_id,
+                'uid': uid,
+                'title': title,
+                'published': published,
+                'updated': updated,
+                'categories': categories,
+                'primary_category': primary_category,
+                'journal_ref': journal_ref,
+                'comment': comment,
+                'url': url,
+                'pdf_url': pdf_url,
+                'author': author.get('name', ''),
+                'rank': rank,
+                'tag': tag,
+                'affiliation': author.get('affiliation', '')
+            })
+
+    return rows
