@@ -374,3 +374,135 @@ def load_journals_from_csv(csv_path: Path) -> List[Dict[str, Any]]:
         log_message(f"加载CSV失败: {e}", "ERROR")
         raise
 
+
+# ============ 期刊验证函数 ============
+
+def validate_journal(journal_name: str) -> Dict[str, Any]:
+    """验证单个期刊是否可用
+
+    Returns:
+        dict: {
+            "query_type": "venue" | "query" | None,
+            "valid": True | False,
+            "error": str | None
+        }
+    """
+    log_message(f"验证期刊: {journal_name}")
+
+    # 先尝试 venue 查询
+    params = {
+        "venue": journal_name,
+        "limit": 1,
+        "fields": "paperId"
+    }
+
+    for retry in range(MAX_RETRIES):
+        data = make_request(f"{BASE_URL}/paper/search", params)
+
+        if data is None:
+            log_message(f"  venue查询失败 (重试 {retry+1}/{MAX_RETRIES})", "WARNING")
+            time.sleep(REQUEST_INTERVAL)
+            continue
+
+        papers = data.get("data", [])
+        if papers:
+            log_message(f"  ✓ 期刊有效 (venue查询)")
+            return {"query_type": "venue", "valid": True, "error": None}
+        else:
+            break
+
+    # venue 无结果，尝试 query 查询
+    log_message(f"  venue无结果，尝试query查询")
+    params = {
+        "query": journal_name,
+        "limit": 1,
+        "fields": "paperId"
+    }
+
+    for retry in range(MAX_RETRIES):
+        data = make_request(f"{BASE_URL}/paper/search", params)
+
+        if data is None:
+            log_message(f"  query查询失败 (重试 {retry+1}/{MAX_RETRIES})", "WARNING")
+            time.sleep(REQUEST_INTERVAL)
+            continue
+
+        papers = data.get("data", [])
+        if papers:
+            log_message(f"  ✓ 期刊有效 (query查询)")
+            return {"query_type": "query", "valid": True, "error": None}
+        else:
+            break
+
+    # 都无效
+    log_message(f"  ✗ 期刊无效", "WARNING")
+    return {"query_type": None, "valid": False, "error": "No results found"}
+
+
+def batch_validate_journals(journal_list: List[Dict[str, Any]],
+                           progress_data: dict) -> Dict[str, Dict[str, Any]]:
+    """批量验证期刊
+
+    Returns:
+        dict: {journal_name: {"query_type": str, "status": str}}
+    """
+    log_message("开始批量验证期刊")
+    print("\n🔍 验证期刊有效性...")
+
+    validated = {}
+
+    with tqdm(total=len(journal_list), desc="   进度",
+              unit="期刊", ncols=80) as pbar:
+        for journal_info in journal_list:
+            journal_name = journal_info["name"]
+
+            # 检查是否已验证
+            if journal_name in progress_data["journals"]:
+                existing = progress_data["journals"][journal_name]
+                if existing["status"] in ["valid", "completed", "in_progress"]:
+                    validated[journal_name] = {
+                        "query_type": existing.get("query_type"),
+                        "status": existing["status"]
+                    }
+                    pbar.update(1)
+                    continue
+
+            # 验证期刊
+            result = validate_journal(journal_name)
+
+            if result["valid"]:
+                validated[journal_name] = {
+                    "query_type": result["query_type"],
+                    "status": "valid"
+                }
+                update_journal_progress(
+                    progress_data, journal_name,
+                    status="valid",
+                    query_type=result["query_type"]
+                )
+            else:
+                update_journal_progress(
+                    progress_data, journal_name,
+                    status="failed",
+                    query_type=None,
+                    error=result.get("error", "Unknown error")
+                )
+
+            pbar.update(1)
+            pbar.set_postfix_str(f"有效:{len(validated)}个")
+
+            # 保存进度
+            save_progress(progress_data)
+            time.sleep(REQUEST_INTERVAL)
+
+    valid_count = len([j for j in validated.values()
+                      if j["status"] == "valid"])
+    failed_count = len(journal_list) - valid_count
+
+    print(f"   有效: {valid_count} 个 | 无效: {failed_count} 个")
+    log_message(f"验证完成: {valid_count} 有效, {failed_count} 无效")
+
+    return validated
+
+# ============ 论文获取函数 ============
+
