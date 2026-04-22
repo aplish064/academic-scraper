@@ -425,6 +425,67 @@
             border-top: 1px solid var(--border-color);
             margin-top: 2rem;
         }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+        }
+
+        .toast {
+            background: var(--white);
+            border-radius: 8px;
+            padding: 1rem 1.5rem;
+            margin-bottom: 0.5rem;
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            animation: slideInRight 0.3s ease-out;
+            max-width: 400px;
+        }
+
+        .toast.error {
+            border-left: 4px solid #ef4444;
+        }
+
+        .toast.warning {
+            border-left: 4px solid #f59e0b;
+        }
+
+        .toast.success {
+            border-left: 4px solid #10b981;
+        }
+
+        .toast-icon {
+            font-size: 1.25rem;
+        }
+
+        .toast-message {
+            flex: 1;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+        }
+
+        .toast-close {
+            cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 1.25rem;
+            line-height: 1;
+        }
+
+        @keyframes slideInRight {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
     </style>
 </head>
 <body>
@@ -465,6 +526,7 @@
                     <option value="openalex">OpenAlex</option>
                     <option value="semantic">Semantic Scholar</option>
                     <option value="dblp">DBLP</option>
+                    <option value="arxiv">arXiv</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -633,6 +695,32 @@
             </div>
 
             <!-- 每日论文累计 - 面积图 -->
+
+            <!-- arXiv分类分布图 -->
+            <div class="chart-card" id="categoryChartCard" style="display: none;">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">学科分类分布</div>
+                        <div class="chart-subtitle">按主分类统计论文数量</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            </div>
+
+            <!-- arXiv时间趋势图 -->
+            <div class="chart-card" id="timelineChartCard" style="display: none;">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">论文发表趋势</div>
+                        <div class="chart-subtitle">按月份统计论文数量</div>
+                    </div>
+                </div>
+                <div class="chart-body small">
+                    <canvas id="timelineChart"></canvas>
+                </div>
+            </div>
         </div>
 
         <!-- Top Papers Table -->
@@ -667,7 +755,57 @@
         // Global data
         let allPapers = [];
         let charts = {};
-        let currentDataSource = 'all'; // 'all', 'openalex', 'semantic'
+        let currentDataSource = 'all'; // 'all', 'openalex', 'semantic', 'dblp', 'arxiv'
+
+        // Toast notification system
+        function showToast(message, type = 'info') {
+            const container = document.querySelector('.toast-container') || createToastContainer();
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+
+            const icons = {
+                error: '❌',
+                warning: '⚠️',
+                success: '✅',
+                info: 'ℹ️'
+            };
+
+            toast.innerHTML = `
+                <span class="toast-icon">${icons[type]}</span>
+                <span class="toast-message">${message}</span>
+                <span class="toast-close" onclick="this.parentElement.remove()">×</span>
+            `;
+
+            container.appendChild(toast);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                toast.style.animation = 'slideInRight 0.3s ease-out reverse';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
+        function createToastContainer() {
+            const container = document.createElement('div');
+            container.className = 'toast-container';
+            document.body.appendChild(container);
+            return container;
+        }
+
+        function showError(message, error = null) {
+            console.error('Error:', message, error);
+            showToast(message, 'error');
+        }
+
+        function showWarning(message) {
+            console.warn('Warning:', message);
+            showToast(message, 'warning');
+        }
+
+        function showSuccess(message) {
+            console.log('Success:', message);
+            showToast(message, 'success');
+        }
 
         // Chart.js global config
         Chart.defaults.font.family = "'IBM Plex Sans', sans-serif";
@@ -723,18 +861,29 @@
                 }
 
                 const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
                 const data = await response.json();
 
                 if (data.success || data.statistics) {
                     updateLoading('正在处理数据...');
                     await processAggregatedData(data);
                     hideLoading();
+                    showSuccess(`成功加载${currentDataSource === 'all' ? '全部' : currentDataSource}数据`);
                 } else {
-                    throw new Error('获取数据失败');
+                    throw new Error('获取数据失败：无效的响应格式');
                 }
             } catch (error) {
                 console.error('Error loading data:', error);
-                updateLoading('数据加载失败，请刷新重试');
+                showError('数据加载失败，请检查网络连接或稍后重试', error);
+                updateLoading('数据加载失败');
+                // Keep loading overlay visible with error message
+                setTimeout(() => {
+                    hideLoading();
+                }, 2000);
             }
         }
 
@@ -742,6 +891,11 @@
         async function processAggregatedData(data) {
             try {
                 console.log('开始处理聚合数据...', data.source);
+
+                if (!data.statistics) {
+                    throw new Error('缺少统计数据');
+                }
+
                 // Update statistics from aggregated data
                 const stats = data.statistics;
                 console.log('统计数据:', stats);
@@ -830,15 +984,24 @@
                     if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
+                } else if (data.source === 'arxiv') {
+                    // arXiv：显示arXiv特有图表
+                    if (countryCard) countryCard.style.display = 'none';
+                    if (instTypeCard) instTypeCard.style.display = 'none';
+                    if (fwciDistCard) fwciDistCard.style.display = 'none';
+                    if (citationDistCard) citationDistCard.style.display = 'none';
+                    if (ccfClassCard) ccfClassCard.style.display = 'none';
+                    if (pubTypeCard) pubTypeCard.style.display = 'none';
+                    if (venueTypeCard) venueTypeCard.style.display = 'none';
                 } else {
                     // 全部数据：显示OpenAlex图表 + DBLP特有图表 + 引用分布
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
                     if (citationDistCard) citationDistCard.style.display = 'block';
-                    if (ccfClassCard) ccfClassCard.style.display = 'block';
+                    if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
-                    if (venueTypeCard) venueTypeCard.style.display = 'block';
+                    if (venueTypeCard) venueTypeCard.style.display = 'none';
                 }
 
                 animateNumber(document.getElementById('highCitations'), stats.high_citations);
@@ -858,7 +1021,8 @@
                 const now = new Date();
                 const dataSourceText = data.source === 'openalex' ? 'OpenAlex' :
                                      data.source === 'semantic' ? 'Semantic Scholar' :
-                                     data.source === 'dblp' ? 'DBLP' : '全部数据';
+                                     data.source === 'dblp' ? 'DBLP' :
+                                     data.source === 'arxiv' ? 'arXiv' : '全部数据';
                 document.getElementById('lastUpdate').textContent = `${dataSourceText} - ${now.toLocaleString('zh-CN')}`;
                 document.getElementById('footerTime').textContent = now.toLocaleString('zh-CN');
                 document.getElementById('totalRecords').textContent = formatNumber(stats.total_papers);
@@ -913,10 +1077,65 @@
                     }
                 }
 
+                // 为arXiv创建的图表
+                if (data.source === 'arxiv') {
+                    const categoryChartCard = document.getElementById('categoryChartCard');
+                    const timelineChartCard = document.getElementById('timelineChartCard');
+
+                    if (categoryChartCard) categoryChartCard.style.display = 'block';
+                    if (timelineChartCard) timelineChartCard.style.display = 'block';
+
+                    if (Object.keys(data.category_distribution || {}).length > 0) {
+                        chartsToCreate.push(() => renderCategoryChart(data.category_distribution));
+                    }
+                    if (Object.keys(data.papers_by_date || {}).length > 0) {
+                        chartsToCreate.push(() => renderTimelineChart(data.papers_by_date));
+                    }
+                } else {
+                    // 隐藏arXiv图表卡片
+                    const categoryChartCard = document.getElementById('categoryChartCard');
+                    const timelineChartCard = document.getElementById('timelineChartCard');
+
+                    if (categoryChartCard) categoryChartCard.style.display = 'none';
+                    if (timelineChartCard) timelineChartCard.style.display = 'none';
+                }
+
+                // Update statistics for arXiv data source
+                if (data.source === 'arxiv') {
+                    // arXiv specific statistics
+                    const journalsCard = document.getElementById('totalJournals');
+                    if (journalsCard) {
+                        const parentCard = journalsCard.closest('.stat-card');
+                        if (parentCard) {
+                            const label = parentCard.querySelector('.stat-label');
+                            if (label && data.statistics.unique_categories) {
+                                label.textContent = '学科分类数';
+                                animateNumber(journalsCard, data.statistics.unique_categories);
+                            }
+                        }
+                    }
+
+                    // Display date range if available
+                    if (data.statistics.earliest_date && data.statistics.latest_date) {
+                        const timeRangeCard = document.createElement('div');
+                        timeRangeCard.className = 'stat-card';
+                        timeRangeCard.innerHTML = `
+                            <div class="stat-label">时间范围</div>
+                            <div class="stat-value" style="font-size: 0.9rem;">${data.statistics.earliest_date} ~ ${data.statistics.latest_date}</div>
+                        `;
+                        // Insert after high citations card
+                        const highCitationsCard = document.getElementById('highCitations').closest('.stat-card');
+                        if (highCitationsCard && highCitationsCard.nextSibling) {
+                            highCitationsCard.parentNode.insertBefore(timeRangeCard, highCitationsCard.nextSibling);
+                        }
+                    }
+                }
+
                 await Promise.all(chartsToCreate);
                 console.log('所有图表创建完成');
             } catch (error) {
                 console.error('处理聚合数据时出错:', error);
+                showError('处理数据时发生错误', error);
                 throw error;
             }
         }
@@ -1977,6 +2196,164 @@
             const overlay = document.getElementById('loadingOverlay');
             overlay.style.display = 'flex';
             overlay.style.opacity = '1';
+        }
+
+        // Render arXiv category distribution chart (Pie chart)
+        function renderCategoryChart(data) {
+            try {
+                if (!data || Object.keys(data).length === 0) {
+                    showWarning('没有可用的分类数据');
+                    return;
+                }
+
+                // Sort by count and take top 15
+                const sorted = Object.entries(data)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 15);
+
+                const labels = sorted.map(x => x[0]);
+                const counts = sorted.map(x => x[1]);
+
+                if (charts.category) charts.category.destroy();
+
+                const ctx = document.getElementById('categoryChart');
+                if (!ctx) {
+                    showError('找不到分类图表容器');
+                    return;
+                }
+
+                charts.category = new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: counts,
+                            backgroundColor: generateColors(counts.length)
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'right',
+                                labels: {
+                                    font: {
+                                        size: 10
+                                    },
+                                    boxWidth: 15
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Top 15 学科分类',
+                                font: {
+                                    size: 14,
+                                    weight: '600'
+                                }
+                            }
+                        }
+                    }
+                });
+
+                showSuccess('分类图表加载成功');
+            } catch (error) {
+                showError('渲染分类图表失败', error);
+            }
+        }
+
+        // Render arXiv timeline chart (Line chart)
+        function renderTimelineChart(data) {
+            try {
+                if (!data || Object.keys(data).length === 0) {
+                    showWarning('没有可用的时间线数据');
+                    return;
+                }
+
+                // Sort dates
+                const sortedDates = Object.keys(data).sort();
+                const counts = sortedDates.map(d => data[d]);
+
+                if (charts.timeline) charts.timeline.destroy();
+
+                const ctx = document.getElementById('timelineChart');
+                if (!ctx) {
+                    showError('找不到时间线图表容器');
+                    return;
+                }
+
+                charts.timeline = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: sortedDates,
+                        datasets: [{
+                            label: '论文数量',
+                            data: counts,
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 2,
+                            pointHoverRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            title: {
+                                display: true,
+                                text: '按月统计论文数量',
+                                font: {
+                                    size: 14,
+                                    weight: '600'
+                                }
+                            }
+                        },
+                        scales: {
+                            y: { beginAtZero: true },
+                            x: {
+                                ticks: {
+                                    maxRotation: 45,
+                                    minRotation: 45,
+                                    autoSkip: true,
+                                    maxTicksLimit: 12
+                                },
+                                grid: {
+                                    display: false
+                                }
+                            }
+                        }
+                    }
+                });
+
+                showSuccess('时间线图表加载成功');
+            } catch (error) {
+                showError('渲染时间线图表失败', error);
+            }
+        }
+
+        // Generate colors for charts
+        function generateColors(count) {
+            const colors = [
+                '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe',
+                '#1e40af', '#1d4ed8', '#1e3a8a', '#172554', '#0c4a6e',
+                '#075985', '#0369a1', '#0ea5e9', '#0284c7', '#38bdf8',
+                '#10b981', '#059669', '#047857', '#065f46', '#064e3b',
+                '#f59e0b', '#d97706', '#b45309', '#92400e', '#78350f',
+                '#ef4444', '#dc2626', '#b91c1c', '#991b1b', '#7f1d1d',
+                '#8b5cf6', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95',
+                '#ec4899', '#db2777', '#be185d', '#9d174d', '#831843'
+            ];
+
+            // If we need more colors than available, generate them
+            const result = [];
+            for (let i = 0; i < count; i++) {
+                result.push(colors[i % colors.length]);
+            }
+            return result;
         }
 
         // Initialize
