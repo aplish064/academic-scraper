@@ -578,7 +578,7 @@
         <!-- 论文数量趋势和TOP期刊分布 - 同行显示 -->
         <div class="charts-row">
             <!-- 论文数量趋势 - 折线图 -->
-            <div class="chart-card">
+            <div class="chart-card" id="papersTrendCard">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">论文数量趋势</div>
@@ -591,7 +591,7 @@
             </div>
 
             <!-- 期刊分布 TOP50 - 横向柱状图 -->
-            <div class="chart-card">
+            <div class="chart-card" id="journalDistCard">
                 <div class="chart-header">
                     <div>
                         <div class="chart-title">TOP 50 期刊分布</div>
@@ -872,7 +872,6 @@
                     updateLoading('正在处理数据...');
                     await processAggregatedData(data);
                     hideLoading();
-                    showSuccess(`成功加载${currentDataSource === 'all' ? '全部' : currentDataSource}数据`);
                 } else {
                     throw new Error('获取数据失败：无效的响应格式');
                 }
@@ -966,6 +965,11 @@
                     if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
+                    // 显示论文数量趋势和期刊分布卡片
+                    const papersTrendCard = document.getElementById('papersTrendCard');
+                    const journalDistCard = document.getElementById('journalDistCard');
+                    if (papersTrendCard) papersTrendCard.style.display = 'block';
+                    if (journalDistCard) journalDistCard.style.display = 'block';
                 } else if (data.source === 'dblp') {
                     // DBLP：只显示特有图表
                     if (countryCard) countryCard.style.display = 'none';
@@ -975,6 +979,11 @@
                     if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
+                    // 显示论文数量趋势和期刊分布卡片
+                    const papersTrendCard = document.getElementById('papersTrendCard');
+                    const journalDistCard = document.getElementById('journalDistCard');
+                    if (papersTrendCard) papersTrendCard.style.display = 'block';
+                    if (journalDistCard) journalDistCard.style.display = 'block';
                 } else if (data.source === 'semantic') {
                     // Semantic：显示基础图表（引用分布）
                     if (countryCard) countryCard.style.display = 'none';
@@ -984,8 +993,13 @@
                     if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
+                    // 显示论文数量趋势和期刊分布卡片
+                    const papersTrendCard = document.getElementById('papersTrendCard');
+                    const journalDistCard = document.getElementById('journalDistCard');
+                    if (papersTrendCard) papersTrendCard.style.display = 'block';
+                    if (journalDistCard) journalDistCard.style.display = 'block';
                 } else if (data.source === 'arxiv') {
-                    // arXiv：显示arXiv特有图表
+                    // arXiv：显示arXiv特有图表，隐藏非arXiv图表
                     if (countryCard) countryCard.style.display = 'none';
                     if (instTypeCard) instTypeCard.style.display = 'none';
                     if (fwciDistCard) fwciDistCard.style.display = 'none';
@@ -993,6 +1007,11 @@
                     if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
+                    // 隐藏论文数量趋势和期刊分布卡片
+                    const papersTrendCard = document.getElementById('papersTrendCard');
+                    const journalDistCard = document.getElementById('journalDistCard');
+                    if (papersTrendCard) papersTrendCard.style.display = 'none';
+                    if (journalDistCard) journalDistCard.style.display = 'none';
                 } else {
                     // 全部数据：显示OpenAlex图表 + DBLP特有图表 + 引用分布
                     if (countryCard) countryCard.style.display = 'none';
@@ -1002,6 +1021,11 @@
                     if (ccfClassCard) ccfClassCard.style.display = 'none';
                     if (pubTypeCard) pubTypeCard.style.display = 'none';
                     if (venueTypeCard) venueTypeCard.style.display = 'none';
+                    // 显示论文数量趋势和期刊分布卡片
+                    const papersTrendCard = document.getElementById('papersTrendCard');
+                    const journalDistCard = document.getElementById('journalDistCard');
+                    if (papersTrendCard) papersTrendCard.style.display = 'block';
+                    if (journalDistCard) journalDistCard.style.display = 'block';
                 }
 
                 // 只为有high_citations字段的数据源显示高被引论文统计
@@ -1013,10 +1037,25 @@
                 const highCitationsElement = document.getElementById('highCitations');
                 if (highCitationsElement && highCitationsElement.parentElement) {
                     const highCitationsCard = highCitationsElement.parentElement;
-                    if (data.source === 'dblp') {
-                        highCitationsCard.style.display = 'none';  // DBLP没有引用数据
+                    if (data.source === 'dblp' || data.source === 'arxiv') {
+                        highCitationsCard.style.display = 'none';  // DBLP和arXiv没有引用数据
                     } else {
                         highCitationsCard.style.display = 'block';
+                    }
+                }
+
+                // 重置totalJournals卡片标签（非arxiv数据源）
+                if (data.source !== 'arxiv') {
+                    const journalsCard = document.getElementById('totalJournals');
+                    if (journalsCard) {
+                        const parentCard = journalsCard.closest('.stat-card');
+                        if (parentCard) {
+                            const label = parentCard.querySelector('.stat-label');
+                            if (label && stats.total_journals !== undefined) {
+                                label.textContent = '期刊/会议数';
+                                animateNumber(journalsCard, stats.total_journals);
+                            }
+                        }
                     }
                 }
 
@@ -1109,7 +1148,7 @@
                     }
                 } else {
                     // 隐藏arXiv图表卡片
-                    const categoryChartCard = document.getElementById('categoryCardCard');
+                    const categoryChartCard = document.getElementById('categoryChartCard');
                     const timelineChartCard = document.getElementById('timelineChartCard');
 
                     if (categoryChartCard) categoryChartCard.style.display = 'none';
@@ -1133,7 +1172,14 @@
 
                     // Display date range if available
                     if (data.statistics.earliest_date && data.statistics.latest_date) {
+                        // Remove existing timeRangeCard if any
+                        const existingTimeRangeCard = document.getElementById('timeRangeCard');
+                        if (existingTimeRangeCard) {
+                            existingTimeRangeCard.remove();
+                        }
+
                         const timeRangeCard = document.createElement('div');
+                        timeRangeCard.id = 'timeRangeCard';
                         timeRangeCard.className = 'stat-card';
                         timeRangeCard.innerHTML = `
                             <div class="stat-label">时间范围</div>
@@ -1144,6 +1190,12 @@
                         if (highCitationsCard && highCitationsCard.nextSibling) {
                             highCitationsCard.parentNode.insertBefore(timeRangeCard, highCitationsCard.nextSibling);
                         }
+                    }
+                } else {
+                    // Remove timeRangeCard for non-arxiv sources
+                    const existingTimeRangeCard = document.getElementById('timeRangeCard');
+                    if (existingTimeRangeCard) {
+                        existingTimeRangeCard.remove();
                     }
                 }
 
@@ -2272,8 +2324,6 @@
                         }
                     }
                 });
-
-                showSuccess('分类图表加载成功');
             } catch (error) {
                 showError('渲染分类图表失败', error);
             }
@@ -2344,8 +2394,6 @@
                         }
                     }
                 });
-
-                showSuccess('时间线图表加载成功');
             } catch (error) {
                 showError('渲染时间线图表失败', error);
             }
