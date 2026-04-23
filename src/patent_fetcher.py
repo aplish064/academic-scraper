@@ -423,7 +423,8 @@ async def fetch_uspto_patent(patent_id: str, session: httpx.AsyncClient) -> Dict
     # 提取专利号（移除 US 前缀和后缀）
     clean_id = patent_id.replace('US', '').split('-')[0].split('A')[0].split('B')[0]
 
-    url = f"{USPTO_API_BASE}"
+    # TODO: Verify correct USPTO API endpoint path
+    url = f"{USPTO_API_BASE}"  # May need to add specific endpoint path
     params = {
         'patentNumber': clean_id,
         'api_key': ''
@@ -447,6 +448,7 @@ async def fetch_uspto_patent(patent_id: str, session: httpx.AsyncClient) -> Dict
                     'publication_date': parse_date(data.get('grantDate')),
                     'grant_date': parse_date(data.get('grantDate')),
                     'patent_type': data.get('patentType', 'utility'),
+                    # TODO: Verify correct field for classifications in USPTO API response
                     'classifications': parse_uspto_classifications(data.get('citations', [])),
                     'citations': len(data.get('citations', [])),
                     'family_size': 1,
@@ -578,17 +580,109 @@ async def supplement_uspto_data(client, limit: int = 100):
                     client.execute(f'INSERT INTO {CH_TABLE} VALUES', ch_rows)
                     updated_count += 1
                     log_message(f"更新成功: {patent_id}")
+                    completed_patents.append(patent_id)  # Only add if successful
 
-                # 更新进度
-                completed_patents.append(patent_id)
-                progress['phases']['uspto_api_supplement']['completed_patents'] = completed_patents
-                progress['phases']['uspto_api_supplement']['total_to_process'] = len(us_patents)
-                save_progress(progress)
+            # 更新进度
+            progress['phases']['uspto_api_supplement']['completed_patents'] = completed_patents
+            progress['phases']['uspto_api_supplement']['total_to_process'] = len(us_patents)
+            save_progress(progress)
 
             # 避免请求过快
             await asyncio.sleep(1)
 
     log_message(f"USPTO API 补充完成: {updated_count} 条专利")
+
+
+# ========== 统计和报告功能 ==========
+
+def generate_statistics(client) -> Dict:
+    """生成统计信息"""
+    stats = {
+        'total_patents': 0,
+        'total_rows': 0,
+        'data_sources': {},
+        'coverage': {},
+        'date_range': {},
+        'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+    # 总专利数（按 patent_id 去重）
+    result = client.query('SELECT count(DISTINCT patent_id) FROM Patents')
+    stats['total_patents'] = result.result_rows[0][0]
+
+    # 总行数
+    result = client.query('SELECT count(*) FROM Patents')
+    stats['total_rows'] = result.result_rows[0][0]
+
+    # 按来源统计
+    result = client.query('''
+        SELECT source, count(DISTINCT patent_id) as cnt
+        FROM Patents
+        GROUP BY source
+    ''')
+
+    for source, count in result.result_rows:
+        stats['data_sources'][source] = count
+
+    # 按国家/地区统计
+    result = client.query('''
+        SELECT
+            substring(patent_id, 1, 2) as country,
+            count(DISTINCT patent_id) as cnt
+        FROM Patents
+        GROUP BY country
+        ORDER BY cnt DESC
+    ''')
+
+    for country, count in result.result_rows:
+        stats['coverage'][country] = count
+
+    # 日期范围
+    result = client.query('''
+        SELECT
+            min(publication_date) as earliest,
+            max(publication_date) as latest
+        FROM Patents
+        WHERE publication_date != ''
+    ''')
+
+    if result.result_rows:
+        earliest, latest = result.result_rows[0]
+        stats['date_range']['earliest'] = earliest
+        stats['date_range']['latest'] = latest
+
+    # 保存统计文件
+    with open(STATS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(stats, f, indent=2, ensure_ascii=False)
+
+    return stats
+
+
+def print_statistics(stats: Dict):
+    """打印统计信息"""
+    log_message("=" * 80)
+    log_message("数据统计报告")
+    log_message("=" * 80)
+
+    log_message(f"总专利数: {stats['total_patents']:,}")
+    log_message(f"总行数: {stats['total_rows']:,}")
+    log_message("")
+
+    log_message("数据源分布:")
+    for source, count in stats['data_sources'].items():
+        log_message(f"  {source}: {count:,}")
+
+    log_message("")
+    log_message("地区分布:")
+    for country, count in list(stats['coverage'].items())[:10]:
+        log_message(f"  {country}: {count:,}")
+
+    log_message("")
+    log_message("日期范围:")
+    log_message(f"  最早: {stats['date_range'].get('earliest', 'N/A')}")
+    log_message(f"  最新: {stats['date_range'].get('latest', 'N/A')}")
+
+    log_message("=" * 80)
 
 
 # ========== 主函数 ==========
@@ -641,6 +735,11 @@ async def main():
             await supplement_uspto_data(client, limit=100)
         except Exception as e:
             log_message(f"USPTO API 补充失败: {str(e)}")
+
+    # 生成统计报告
+    log_message("生成统计报告...")
+    stats = generate_statistics(client)
+    print_statistics(stats)
 
     log_message("专利获取器完成")
 
