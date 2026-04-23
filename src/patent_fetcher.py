@@ -25,6 +25,25 @@ import aiofiles
 import aiohttp
 from pathlib import Path
 
+
+def handle_error(error: Exception, context: str = ""):
+    """统一错误处理"""
+    error_msg = f"错误: {context} - {str(error)}"
+
+    if isinstance(error, KeyboardInterrupt):
+        log_message("用户中断")
+        raise
+    elif isinstance(error, MemoryError):
+        log_message(f"内存不足: {error_msg}")
+        log_message("建议减少并发数或分批处理")
+    elif isinstance(error, ConnectionError):
+        log_message(f"网络连接错误: {error_msg}")
+    else:
+        log_message(f"未知错误: {error_msg}")
+        log_message(f"详细信息: {traceback.format_exc()}")
+
+    return error_msg
+
 # ========== 配置 ==========
 
 # 数据目录
@@ -689,59 +708,71 @@ def print_statistics(stats: Dict):
 
 async def main():
     """主函数"""
-    setup_logging()
-    log_message("专利获取器启动")
+    try:
+        setup_logging()
+        log_message("专利获取器启动")
 
-    progress = load_progress()
-    client = get_clickhouse_client()
+        progress = load_progress()
+        client = get_clickhouse_client()
 
-    # 阶段 1: Google Patents 数据集下载
-    if progress['phases']['google_dataset_download']['status'] != 'completed':
-        try:
-            download_result = await download_google_patents_dataset()
-            log_message(f"Google Patents 下载阶段完成")
-        except Exception as e:
-            log_message(f"Google Patents 下载阶段失败: {str(e)}")
-            return
-    else:
-        log_message("Google Patents 下载阶段已完成，跳过")
+        # 阶段 1: Google Patents 数据集下载
+        if progress['phases']['google_dataset_download']['status'] != 'completed':
+            try:
+                download_result = await download_google_patents_dataset()
+                log_message(f"Google Patents 下载阶段完成")
+            except Exception as e:
+                handle_error(e, "Google Patents 下载")
+                return
+        else:
+            log_message("Google Patents 下载阶段已完成，跳过")
 
-    # 阶段 2: 处理下载的文件
-    if progress['phases']['google_dataset_download']['status'] == 'completed':
-        log_message("开始处理下载的文件")
+        # 阶段 2: 处理下载的文件
+        if progress['phases']['google_dataset_download']['status'] == 'completed':
+            log_message("开始处理下载的文件")
 
-        completed_files = progress['phases']['google_dataset_download'].get('completed_files', [])
+            completed_files = progress['phases']['google_dataset_download'].get('completed_files', [])
 
-        total_patents = 0
-        total_rows = 0
+            total_patents = 0
+            total_rows = 0
 
-        for file_path in completed_files:
-            if os.path.exists(file_path):
-                try:
-                    result = await process_google_patents_file(file_path, client)
-                    total_patents += result['patent_count']
-                    total_rows += result['row_count']
-                except Exception as e:
-                    log_message(f"处理文件失败 {file_path}: {str(e)}")
-            else:
-                log_message(f"文件不存在: {file_path}")
+            for file_path in completed_files:
+                if os.path.exists(file_path):
+                    try:
+                        result = await process_google_patents_file(file_path, client)
+                        total_patents += result['patent_count']
+                        total_rows += result['row_count']
+                    except Exception as e:
+                        handle_error(e, f"处理文件 {file_path}")
+                        continue
+                else:
+                    log_message(f"文件不存在: {file_path}")
 
-        log_message(f"处理完成: {total_patents} 条专利, {total_rows} 行")
+            log_message(f"处理完成: {total_patents} 条专利, {total_rows} 行")
 
-    # 阶段 3: USPTO API 补充（可选）
-    if progress['phases']['google_dataset_download']['status'] == 'completed':
-        log_message("开始 USPTO API 补充")
-        try:
-            await supplement_uspto_data(client, limit=100)
-        except Exception as e:
-            log_message(f"USPTO API 补充失败: {str(e)}")
+        # 阶段 3: USPTO API 补充（可选）
+        if progress['phases']['google_dataset_download']['status'] == 'completed':
+            log_message("开始 USPTO API 补充")
+            try:
+                await supplement_uspto_data(client, limit=100)
+            except Exception as e:
+                handle_error(e, "USPTO API 补充")
+                # Don't return - continue to statistics
 
-    # 生成统计报告
-    log_message("生成统计报告...")
-    stats = generate_statistics(client)
-    print_statistics(stats)
+        # 生成统计报告
+        log_message("生成统计报告...")
+        stats = generate_statistics(client)
+        print_statistics(stats)
 
-    log_message("专利获取器完成")
+        log_message("专利获取器完成")
+
+    except KeyboardInterrupt:
+        log_message("用户中断，正在保存进度...")
+        progress = load_progress()
+        save_progress(progress)
+        log_message("进度已保存")
+    except Exception as e:
+        handle_error(e, "主流程")
+        return
 
 
 if __name__ == '__main__':
