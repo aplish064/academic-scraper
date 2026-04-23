@@ -330,3 +330,76 @@ def parse_patent_page(html_content: str, url: str) -> Dict[str, Any]:
         'error': 'Not implemented yet',
         'data': None
     }
+
+
+# ==================== 抓取引擎 ====================
+
+def create_fetcher():
+    """
+    创建AsyncFetcher实例，启用隐身模式
+    """
+    fetcher = AsyncFetcher(
+        stealth_mode=True,  # 启用隐身模式，避免检测
+        timeout=TIMEOUT,
+        retries=MAX_RETRIES
+    )
+    return fetcher
+
+
+async def fetch_page(url: str, fetcher, retry_count: int = 0) -> Optional[str]:
+    """
+    异步抓取页面
+
+    Args:
+        url: 目标URL
+        fetcher: AsyncFetcher实例
+        retry_count: 当前重试次数
+
+    Returns:
+        HTML内容字符串，失败返回None
+    """
+    try:
+        # 使用AsyncFetcher抓取页面
+        response = await fetcher.get(url)
+
+        if response is None:
+            raise Exception("No response received")
+
+        # 检查响应状态
+        if hasattr(response, 'status_code') and response.status_code != 200:
+            raise Exception(f"HTTP {response.status_code}")
+
+        # 获取HTML内容
+        html_content = response.text if hasattr(response, 'text') else str(response)
+
+        return html_content
+
+    except Exception as e:
+        print(f"❌ 抓取失败 ({retry_count + 1}/{MAX_RETRIES}): {url}")
+        print(f"   错误: {e}")
+
+        # 重试逻辑
+        if retry_count < MAX_RETRIES - 1:
+            delay = min(2 ** retry_count, 10)  # 指数退避，最大10秒
+            print(f"   {delay}秒后重试...")
+            await asyncio.sleep(delay)
+            return await fetch_page(url, fetcher, retry_count + 1)
+
+        return None
+
+
+def get_all_dates() -> List[str]:
+    """
+    生成所有需要抓取的日期列表（YYYY-MM-DD格式）
+    从START_YEAR到END_DATE，按日期倒序排列
+    """
+    dates = []
+    current_date = END_DATE
+
+    # 生成日期列表
+    while current_date.year >= START_YEAR:
+        date_str = current_date.strftime('%Y-%m-%d')
+        dates.append(date_str)
+        current_date -= timedelta(days=1)
+
+    return dates
