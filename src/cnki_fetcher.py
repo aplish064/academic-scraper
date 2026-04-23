@@ -10,12 +10,13 @@ import json
 import os
 import gc
 import re
+import random
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from tqdm.asyncio import tqdm
 
 # Scrapling imports
-from scrapling.fetchers.requests import AsyncFetcher
+from scrapling import StealthyFetcher
 
 # HTML parsing
 from bs4 import BeautifulSoup
@@ -336,38 +337,30 @@ def parse_patent_page(html_content: str, url: str) -> Dict[str, Any]:
 
 def create_fetcher():
     """
-    创建AsyncFetcher实例，启用隐身模式
+    创建StealthyFetcher实例，启用隐身模式
     """
-    fetcher = AsyncFetcher(
-        stealth_mode=True,  # 启用隐身模式，避免检测
-        timeout=TIMEOUT,
-        retries=MAX_RETRIES
-    )
+    fetcher = StealthyFetcher()
     return fetcher
 
 
-async def fetch_page(url: str, fetcher, retry_count: int = 0) -> Optional[str]:
+def fetch_page(url: str, fetcher, retry_count: int = 0) -> Optional[str]:
     """
-    异步抓取页面
+    抓取页面（同步）
 
     Args:
         url: 目标URL
-        fetcher: AsyncFetcher实例
+        fetcher: StealthyFetcher实例
         retry_count: 当前重试次数
 
     Returns:
         HTML内容字符串，失败返回None
     """
     try:
-        # 使用AsyncFetcher抓取页面
-        response = await fetcher.get(url)
+        # 使用StealthyFetcher抓取页面
+        response = fetcher.get(url)
 
         if response is None:
             raise Exception("No response received")
-
-        # 检查响应状态
-        if hasattr(response, 'status_code') and response.status_code != 200:
-            raise Exception(f"HTTP {response.status_code}")
 
         # 获取HTML内容
         html_content = response.text if hasattr(response, 'text') else str(response)
@@ -382,8 +375,8 @@ async def fetch_page(url: str, fetcher, retry_count: int = 0) -> Optional[str]:
         if retry_count < MAX_RETRIES - 1:
             delay = min(2 ** retry_count, 10)  # 指数退避，最大10秒
             print(f"   {delay}秒后重试...")
-            await asyncio.sleep(delay)
-            return await fetch_page(url, fetcher, retry_count + 1)
+            time.sleep(delay)
+            return fetch_page(url, fetcher, retry_count + 1)
 
         return None
 
@@ -403,3 +396,78 @@ def get_all_dates() -> List[str]:
         current_date -= timedelta(days=1)
 
     return dates
+
+
+# ==================== 主调度逻辑 ====================
+
+async def main_async():
+    """
+    主异步函数：协调整个抓取流程
+    """
+    print("="*80)
+    print("CNKI文献抓取器启动")
+    print("="*80)
+
+    # 初始化
+    setup_logging()
+    progress = load_progress()
+    all_dates = get_all_dates()
+
+    # 过滤已完成的日期
+    pending_dates = [d for d in all_dates if d not in progress.get('completed_dates', [])]
+
+    print(f"\n总日期数: {len(all_dates)}")
+    print(f"已完成: {len(progress.get('completed_dates', []))}")
+    print(f"待处理: {len(pending_dates)}")
+
+    if not pending_dates:
+        print("\n✓ 所有日期已完成！")
+        return
+
+    # 创建ClickHouse客户端
+    client = create_clickhouse_client()
+    if not client:
+        print("❌ 无法连接ClickHouse，退出")
+        return
+
+    # 创建抓取器
+    fetcher = create_fetcher()
+
+    # 统计变量
+    total_papers = progress.get('total_papers', 0)
+    total_rows = progress.get('total_rows', 0)
+    success_count = 0
+    skip_count = 0
+
+    start_time = time.time()
+
+    # TODO: 实现并发抓取逻辑
+    # for date in pending_dates:
+    #     # TODO: 构造CNKI搜索URL
+    #     # TODO: 抓取页面
+    #     # TODO: 解析数据
+    #     # TODO: 存入ClickHouse
+    #     # TODO: 更新进度
+    #     pass
+
+    print("\n" + "="*80)
+    print("抓取任务完成（框架已完成，解析逻辑待实现）")
+    print("="*80)
+
+
+def main():
+    """
+    程序入口点
+    """
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        print("\n\n⚠️  用户中断，进度已保存")
+    except Exception as e:
+        print(f"\n❌ 程序异常: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()
