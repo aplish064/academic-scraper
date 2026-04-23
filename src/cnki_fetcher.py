@@ -17,6 +17,9 @@ from tqdm.asyncio import tqdm
 # Scrapling imports
 from scrapling.fetchers.requests import AsyncFetcher
 
+# HTML parsing
+from bs4 import BeautifulSoup
+
 # ClickHouse
 import clickhouse_connect
 import pandas as pd
@@ -218,3 +221,112 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
         import traceback
         traceback.print_exc()
         return False
+
+
+# ==================== 资源类型识别和解析 ====================
+
+def identify_resource_type(url: str, content: str = "") -> str:
+    """
+    识别CNKI资源的类型
+    返回: 'journal', 'thesis', 'conference', 'patent', 'unknown'
+    """
+    # 从URL判断
+    if 'CJFD' in url or 'nav' in url:
+        return 'journal'
+    elif 'CDMD' in url or 'CMFD' in url:
+        return 'thesis'
+    elif 'CPFD' in url:
+        return 'conference'
+    elif 'SCOD' in url:
+        return 'patent'
+
+    # 从内容判断（如果有HTML内容）
+    if content:
+        soup = BeautifulSoup(content, 'html.parser')
+
+        # 检查页面特征
+        if '期刊' in content or 'Journal' in content:
+            return 'journal'
+        elif '学位论文' in content or 'Thesis' in content or '硕士' in content or '博士' in content:
+            return 'thesis'
+        elif '会议论文' in content or 'Conference' in content:
+            return 'conference'
+        elif '专利' in content or 'Patent' in content:
+            return 'patent'
+
+    return 'unknown'
+
+
+def parse_cnki_page(html_content: str, url: str) -> Dict[str, Any]:
+    """
+    解析CNKI页面，根据资源类型调用相应的解析函数
+    TODO: 实现具体的解析逻辑
+    """
+    resource_type = identify_resource_type(url, html_content)
+
+    if resource_type == 'journal':
+        return parse_journal_page(html_content, url)
+    elif resource_type == 'thesis':
+        return parse_thesis_page(html_content, url)
+    elif resource_type == 'conference':
+        return parse_conference_page(html_content, url)
+    elif resource_type == 'patent':
+        return parse_patent_page(html_content, url)
+    else:
+        return {
+            'success': False,
+            'error': f'Unknown resource type for URL: {url}',
+            'data': None
+        }
+
+
+def parse_journal_page(html_content: str, url: str) -> Dict[str, Any]:
+    """
+    解析期刊论文页面
+    TODO: 提取标题、作者、摘要、关键词、发表时间、期刊名、卷期等
+    """
+    # TODO: 实现期刊论文的具体解析逻辑
+    return {
+        'success': False,
+        'error': 'Not implemented yet',
+        'data': None
+    }
+
+
+def parse_thesis_page(html_content: str, url: str) -> Dict[str, Any]:
+    """
+    解析学位论文页面
+    TODO: 提取标题、作者、导师、学校、摘要、关键词、授予时间等
+    """
+    # TODO: 实现学位论文的具体解析逻辑
+    return {
+        'success': False,
+        'error': 'Not implemented yet',
+        'data': None
+    }
+
+
+def parse_conference_page(html_content: str, url: str) -> Dict[str, Any]:
+    """
+    解析会议论文页面
+    TODO: 提取标题、作者、摘要、关键词、会议名称、会议时间等
+    """
+    # TODO: 实现会议论文的具体解析逻辑
+    return {
+        'success': False,
+        'error': 'Not implemented yet',
+        'data': None
+    }
+
+
+def parse_patent_page(html_content: str, url: str) -> Dict[str, Any]:
+    """
+    解析专利页面
+    TODO: 提取专利名称、发明人、申请人、摘要、专利号、申请日期等
+    """
+    # TODO: 实现专利的具体解析逻辑
+    return {
+        'success': False,
+        'error': 'Not implemented yet',
+        'data': None
+    }
