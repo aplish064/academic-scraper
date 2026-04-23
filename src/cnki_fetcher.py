@@ -123,3 +123,98 @@ def log_completion(total_papers: int, total_rows: int, success_count: int, skip_
 
     with open(LOG_FILE, 'a', encoding='utf-8') as f:
         f.write(log_message)
+
+# ==================== ClickHouse存储 ====================
+
+def create_clickhouse_client():
+    """创建ClickHouse客户端"""
+    try:
+        client = clickhouse_connect.get_client(
+            host=CH_HOST,
+            port=CH_PORT,
+            username=CH_USERNAME,
+            password=CH_PASSWORD,
+            database=CH_DATABASE
+        )
+        print("✓ ClickHouse连接成功")
+        return client
+    except Exception as e:
+        print(f"❌ ClickHouse连接失败: {e}")
+        return None
+
+
+def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
+    """批量插入数据到ClickHouse（带去重）"""
+    if not rows:
+        return True
+
+    try:
+        # 数据清洗和类型转换
+        cleaned_rows = []
+        current_import_time = datetime.now()
+
+        for row in rows:
+            cleaned_row = {}
+            for key, value in row.items():
+                # 处理None值
+                if value is None:
+                    if key in ['rank', 'cited_count', 'download_count']:
+                        cleaned_row[key] = 0
+                    else:
+                        cleaned_row[key] = ''
+                # 处理NaN值
+                elif isinstance(value, float) and pd.isna(value):
+                    if key in ['rank', 'cited_count', 'download_count']:
+                        cleaned_row[key] = 0
+                    else:
+                        cleaned_row[key] = ''
+                # 类型转换
+                else:
+                    cleaned_row[key] = value
+
+            # 添加import_time字段
+            cleaned_row['import_time'] = current_import_time
+            cleaned_rows.append(cleaned_row)
+
+        # 创建DataFrame
+        df = pd.DataFrame(cleaned_rows)
+
+        # 确保数值列的类型正确
+        df['rank'] = df['rank'].astype(int)
+        df['cited_count'] = df['cited_count'].astype(int)
+        df['download_count'] = df['download_count'].astype(int)
+
+        # 确保日期时间列的类型正确
+        df['import_time'] = pd.to_datetime(df['import_time'])
+
+        # 使用临时表进行去重
+        temp_table = 'temp_cnki_insert_dedup'
+
+        # 创建临时表
+        client.command(f'DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}')
+        client.command(f'''
+            CREATE TABLE {CH_DATABASE}.{temp_table} AS {CH_DATABASE}.{CH_TABLE}
+            ENGINE = Memory
+        ''')
+
+        # 插入到临时表
+        client.insert_df(f'{CH_DATABASE}.{temp_table}', df)
+
+        # 从临时表插入到目标表，使用DISTINCT去重
+        client.command(f'''
+            INSERT INTO {CH_DATABASE}.{CH_TABLE}
+            SELECT DISTINCT * FROM {CH_DATABASE}.{temp_table}
+        ''')
+
+        # 删除临时表
+        client.command(f'DROP TABLE {CH_DATABASE}.{temp_table}')
+
+        return True
+
+    except Exception as e:
+        print(f"❌ 插入ClickHouse失败: {e}")
+        if rows:
+            print(f"   示例数据: {rows[0]}")
+        import traceback
+        traceback.print_exc()
+        return False
