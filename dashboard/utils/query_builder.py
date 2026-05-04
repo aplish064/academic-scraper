@@ -175,6 +175,17 @@ class QueryBuilder:
             return None
 
         formatted_date = adapter.format_date_query(date_field)
+        if getattr(adapter, 'source_name', '') == 'patents':
+            return f"""
+                SELECT
+                    {formatted_date} as date,
+                    count(DISTINCT {doi_field}) as count
+                FROM patent_db.{adapter.get_table()}
+                WHERE {date_field} > toDate('1970-01-01')
+                GROUP BY {formatted_date}
+                ORDER BY date DESC
+                SETTINGS max_threads=1
+            """
 
         if group_by_date:
             return f"""
@@ -250,6 +261,10 @@ class QueryBuilder:
         if not citation_field or not doi_field:
             return None
 
+        count_expr = f"count(DISTINCT {doi_field})" if getattr(adapter, 'source_name', '') == 'patents' else f"uniqHLL12({doi_field})"
+
+        database = "patent_db" if getattr(adapter, 'source_name', '') == 'patents' else "academic_db"
+
         return f"""
             SELECT
                 multiIf(
@@ -262,8 +277,8 @@ class QueryBuilder:
                     {citation_field} < 501, '101-500',
                     '500+'
                 ) as range,
-                uniqHLL12({doi_field}) as count
-            FROM academic_db.{adapter.get_table()}
+                {count_expr} as count
+            FROM {database}.{adapter.get_table()}
             GROUP BY range
             ORDER BY range
             SETTINGS max_threads=4, max_execution_time=60

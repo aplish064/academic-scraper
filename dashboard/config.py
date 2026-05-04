@@ -24,7 +24,8 @@ TABLES = {
     'openalex': 'OpenAlex',       # OpenAlex数据表
     'semantic': 'semantic',        # Semantic Scholar数据表
     'dblp': 'dblp',                # DBLP数据表
-    'arxiv': 'arxiv'              # arXiv数据表
+    'arxiv': 'arxiv',              # arXiv数据表
+    'patents': 'patent_db.patents' # 专利数据表
 }
 
 # 默认数据表
@@ -193,6 +194,50 @@ DATA_SOURCES = {
             'name': 'arXiv',
             'shows_charts': ['category', 'timeline'],
             'shows_stats': ['unique_categories', 'time_range']
+        }
+    },
+    'patents': {
+        'table': 'patents',
+        'enabled': True,
+        'priority': 5,
+        'fields': {
+            'date': 'grant_date',
+            'journal': 'assignees',
+            'venue': 'assignees',
+            'author': 'inventors',
+            'author_name': 'inventors',
+            'doi': 'patent_id',
+            'institution': 'assignees',
+            'country': 'country',
+            'citation_count': 'num_cited_by',
+            'fwci': None,
+            'tag': None,
+            'institution_type': None,
+            'cpc_codes': 'cpc_codes'
+        },
+        'supports': {
+            'citations': True,
+            'fwci': False,
+            'institutions': False,
+            'countries': True,
+            'institution_types': False,
+            'ccf_class': False,
+            'pub_type': False,
+            'venue_type': False,
+            'categories': True,
+            'array_fields': True
+        },
+        'date_format': 'publication_date',
+        'ui': {
+            'name': 'Patents',
+            'shows_charts': ['citation', 'papers_trend', 'journal', 'category'],
+            'shows_stats': ['high_citations'],
+            'labels': {
+                'item': '专利',
+                'author': '发明人',
+                'venue': '权利人',
+                'date': '授权日期'
+            }
         }
     }
 }

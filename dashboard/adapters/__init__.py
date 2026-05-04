@@ -7,13 +7,15 @@ from .openalex import OpenAlexAdapter
 from .dblp import DBLPAdapter
 from .semantic import SemanticAdapter
 from .arxiv import ArXivAdapter
+from .patents import PatentsAdapter
 
 # 注册所有适配器
 ADAPTERS = {
     'openalex': OpenAlexAdapter(),
     'dblp': DBLPAdapter(),
     'semantic': SemanticAdapter(),
-    'arxiv': ArXivAdapter()
+    'arxiv': ArXivAdapter(),
+    'patents': PatentsAdapter()
 }
 
 def get_adapter(source: str) -> DataSourceAdapter:

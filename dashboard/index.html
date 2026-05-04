@@ -527,6 +527,7 @@
                     <option value="semantic">Semantic Scholar</option>
                     <option value="dblp">DBLP</option>
                     <option value="arxiv">arXiv</option>
+                    <option value="patents">Patents</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -742,6 +743,21 @@
                     dateField: 'published'
                 }
             },
+            patents: {
+                name: 'Patents',
+                color: '#0f766e',
+                showsCharts: ['citation', 'papers_trend', 'journal', 'category'],
+                showsStats: ['high_citations'],
+                metrics: [],
+                itemLabel: '专利',
+                authorLabel: '发明人',
+                venueLabel: '权利人',
+                dateLabel: '授权日期',
+                labels: {
+                    journals: '权利人数量',
+                    dateField: 'grant_date'
+                }
+            },
             all: {
                 name: '全部数据',
                 showsCharts: ['papers_trend', 'journal', 'citation'],
@@ -757,7 +773,7 @@
         // Global data
         let allPapers = [];
         let charts = {};
-        let currentDataSource = 'all'; // 'all', 'openalex', 'semantic', 'dblp', 'arxiv'
+        let currentDataSource = 'all'; // 'all', 'openalex', 'semantic', 'dblp', 'arxiv', 'patents'
 
         // Toast notification system
         function showToast(message, type = 'info') {

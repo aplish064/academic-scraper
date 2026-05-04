@@ -226,6 +226,9 @@ class DataSourceAggregator:
         if not adapter:
             return {}
 
+        if source == 'patents':
+            return self.query_top_patent_assignees()
+
         sql = self.query_builder.build_journal_query(adapter)
         if not sql:
             return {}
@@ -252,6 +255,42 @@ class DataSourceAggregator:
         # DBLP 特有指标
         elif source == 'dblp':
             self.query_dblp_metrics(adapter, result)
+        elif source == 'patents':
+            self.query_patent_metrics(result)
+
+    def query_top_patent_assignees(self) -> Dict[str, int]:
+        """查询Top专利权利人"""
+        sql = """
+            SELECT assignee_name, count(DISTINCT patent_id) AS count
+            FROM patent_db.patent_assignees
+            WHERE assignee_name != ''
+            GROUP BY assignee_name
+            ORDER BY count DESC
+            LIMIT 50
+            SETTINGS max_threads=4, max_execution_time=60
+        """
+        query_result = self.query_builder.execute_query(sql)
+        assignees = {}
+        if query_result and query_result.result_rows:
+            for row in query_result.result_rows:
+                assignees[row[0]] = int(row[1])
+        return assignees
+
+    def query_patent_metrics(self, result: Dict):
+        """查询专利特有指标"""
+        cpc_sql = """
+            SELECT cpc_group, count(DISTINCT patent_id) AS count
+            FROM patent_db.patent_cpc
+            WHERE cpc_group != ''
+            GROUP BY cpc_group
+            ORDER BY count DESC
+            LIMIT 20
+            SETTINGS max_threads=4, max_execution_time=30
+        """
+        query_result = self.query_builder.execute_query(cpc_sql)
+        if query_result and query_result.result_rows:
+            for row in query_result.result_rows:
+                result['ccf_class_distribution'][row[0]] = int(row[1])
 
     def query_openalex_metrics(self, adapter, result: Dict):
         """查询OpenAlex特有指标"""

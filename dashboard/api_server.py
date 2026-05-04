@@ -787,7 +787,7 @@ def preload_all_caches():
         print("⚠️  缓存未启用，跳过预加载")
         return
 
-    sources = ['openalex', 'semantic', 'dblp', 'arxiv', 'all']
+    sources = ['openalex', 'semantic', 'dblp', 'arxiv', 'patents', 'all']
 
     for source in sources:
         print(f"  📦 预加载 {source} 数据源...")
