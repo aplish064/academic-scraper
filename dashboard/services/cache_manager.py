@@ -3,6 +3,7 @@
 统一处理缓存读写、验证和合并逻辑
 """
 import json
+import os
 import redis
 from typing import Dict, List, Optional, Any
 from config import REDIS_CONFIG, get_enabled_sources
@@ -20,11 +21,27 @@ class CacheManager:
         """
         self.redis_client = redis_client
         self.cache_enabled = redis_client is not None
-        self.default_ttl = 300  # 默认5分钟缓存
+        self.default_ttl = int(os.getenv("DASHBOARD_CACHE_TTL", "3600"))
+        self.stale_ttl = int(os.getenv("DASHBOARD_STALE_CACHE_TTL", str(7 * 24 * 60 * 60)))
+        self.source_ttls = {
+            "openalex": int(os.getenv("DASHBOARD_OPENALEX_CACHE_TTL", str(60 * 60))),
+            "semantic": int(os.getenv("DASHBOARD_SEMANTIC_CACHE_TTL", str(60 * 60))),
+            "dblp": int(os.getenv("DASHBOARD_DBLP_CACHE_TTL", str(60 * 60))),
+            "arxiv": int(os.getenv("DASHBOARD_ARXIV_CACHE_TTL", str(60 * 60))),
+            "patents": int(os.getenv("DASHBOARD_PATENTS_CACHE_TTL", str(24 * 60 * 60))),
+        }
 
     def get_cache_key(self, source: str) -> str:
         """生成缓存键"""
         return f"aggregated:{source}"
+
+    def get_stale_cache_key(self, source: str) -> str:
+        """生成stale缓存键"""
+        return f"aggregated_stale:{source}"
+
+    def get_source_ttl(self, source: str) -> int:
+        """获取数据源的普通缓存TTL"""
+        return self.source_ttls.get(source, self.default_ttl)
 
     def get_from_cache(self, cache_key: str) -> Optional[Dict]:
         """
@@ -107,6 +124,12 @@ class CacheManager:
             if stats.get('unique_journals', 0) == 0:
                 return False
 
+        if source == 'openalex':
+            if stats.get('unique_authors', 0) == 0:
+                return False
+            if stats.get('unique_institutions', 0) == 0:
+                return False
+
         return True
 
     def get_source_data(self, source: str) -> Optional[Dict]:
@@ -123,7 +146,41 @@ class CacheManager:
         cached_data = self.get_from_cache(cache_key)
 
         if cached_data and self.validate_data_integrity(cached_data, source):
+            self.set_to_cache(self.get_stale_cache_key(source), cached_data, self.stale_ttl)
             return cached_data
+
+        if cached_data:
+            self._delete_cache_key(cache_key)
+
+        return None
+
+    def get_stale_source_data(self, source: str) -> Optional[Dict]:
+        """
+        获取stale缓存数据。
+
+        普通缓存过期后，如果有最近一次有效数据，接口可以先快速返回，
+        避免反向代理在冷查询期间返回502。
+        """
+        cache_key = self.get_stale_cache_key(source)
+        cached_data = self.get_from_cache(cache_key)
+
+        if cached_data and self.validate_data_integrity(cached_data, source):
+            print(f"♻️  使用stale缓存兜底：{source}")
+            return cached_data
+
+        if cached_data:
+            self._delete_cache_key(cache_key)
+
+        return None
+
+    def get_source_data_from_all(self, source: str) -> Optional[Dict]:
+        """从all缓存的_source_data中复用单源快照"""
+        for key in (self.get_cache_key('all'), self.get_stale_cache_key('all')):
+            all_data = self.get_from_cache(key)
+            source_data = (all_data or {}).get('_source_data', {}).get(source)
+            if source_data and self.validate_data_integrity(source_data, source):
+                print(f"🎯 从all缓存复用数据源快照：{source}")
+                return source_data
 
         return None
 
@@ -144,8 +201,29 @@ class CacheManager:
         Returns:
             是否成功
         """
+        if not self.validate_data_integrity(data, source):
+            print(f"⚠️  跳过无效缓存写入：{source}")
+            return False
+
         cache_key = self.get_cache_key(source)
-        return self.set_to_cache(cache_key, data, ttl)
+        live_ttl = ttl or self.get_source_ttl(source)
+        live_saved = self.set_to_cache(cache_key, data, live_ttl)
+
+        stale_key = self.get_stale_cache_key(source)
+        stale_saved = self.set_to_cache(stale_key, data, self.stale_ttl)
+
+        return live_saved or stale_saved
+
+    def _delete_cache_key(self, cache_key: str) -> None:
+        """删除无效缓存键"""
+        if not self.cache_enabled or not self.redis_client:
+            return
+
+        try:
+            self.redis_client.delete(cache_key)
+            print(f"🧹 删除无效缓存：{cache_key}")
+        except Exception as e:
+            print(f"⚠️  删除缓存失败: {e}")
 
     def get_merged_data(
         self,
@@ -184,6 +262,42 @@ class CacheManager:
 
         # 合并可用的缓存数据
         return self.merge_sources_data(list(cached_sources.values()))
+
+    def get_available_merged_data(self, sources: List[str] = None) -> Optional[Dict]:
+        """
+        尽力合并已有的单源缓存。
+
+        all 默认页不能因为某个大数据源冷缓存缺失而同步重查大表；
+        这里只使用 live/stale 缓存中已经有效的数据，至少命中一个源就返回。
+        """
+        if not sources:
+            sources = get_enabled_sources()
+
+        cached_sources = {}
+        missing_sources = []
+
+        for source in sources:
+            data = self.get_source_data(source)
+            if not data:
+                data = self.get_stale_source_data(source)
+
+            if data:
+                cached_sources[source] = data
+            else:
+                missing_sources.append(source)
+
+        if not cached_sources:
+            print("⚠️  没有可用于合并的单源缓存")
+            return None
+
+        if missing_sources:
+            print(f"📊 使用部分缓存合并全部数据：命中 {len(cached_sources)}/{len(sources)}，缺失 {missing_sources}")
+
+        merged = self.merge_sources_data(list(cached_sources.values()))
+        merged['source'] = 'all'
+        merged['table'] = 'all'
+        merged['_partial_sources'] = missing_sources
+        return merged
 
     def merge_sources_data(
         self,

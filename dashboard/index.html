@@ -522,7 +522,7 @@
             <div class="filter-group">
                 <label class="filter-label">数据源</label>
                 <select class="filter-select" id="dataSource" onchange="changeDataSource()">
-                    <option value="all">全部数据</option>
+                    <option value="all" selected>全部数据</option>
                     <option value="openalex">OpenAlex</option>
                     <option value="semantic">Semantic Scholar</option>
                     <option value="dblp">DBLP</option>
@@ -709,7 +709,16 @@
                 showsStats: ['institutions', 'fwci'],
                 metrics: [],
                 labels: {
+                    papers: '总论文数',
+                    authors: '作者总数',
                     journals: '期刊数量',
+                    itemCount: '论文数量',
+                    papersTrendTitle: '论文数量趋势',
+                    papersTrendSubtitle: '按日期统计的论文发表数量',
+                    journalChartTitle: 'TOP 50 期刊分布',
+                    journalChartSubtitle: '论文数量最多的期刊',
+                    citationChartTitle: '引用次数分布',
+                    citationChartSubtitle: '论文引用数量区间分布',
                     dateField: 'publication_date'
                 }
             },
@@ -719,7 +728,14 @@
                 showsStats: [],
                 metrics: [],
                 labels: {
+                    papers: '总论文数',
+                    authors: '作者总数',
                     journals: '期刊/会议数',
+                    itemCount: '论文数量',
+                    papersTrendTitle: '论文数量趋势',
+                    papersTrendSubtitle: '按年份统计的论文发表数量',
+                    journalChartTitle: 'TOP 50 期刊/会议分布',
+                    journalChartSubtitle: '论文数量最多的期刊/会议',
                     dateField: 'year'
                 }
             },
@@ -729,7 +745,16 @@
                 showsStats: [],
                 metrics: [],
                 labels: {
+                    papers: '总论文数',
+                    authors: '作者总数',
                     journals: '期刊数量',
+                    itemCount: '论文数量',
+                    papersTrendTitle: '论文数量趋势',
+                    papersTrendSubtitle: '按日期统计的论文发表数量',
+                    journalChartTitle: 'TOP 50 期刊分布',
+                    journalChartSubtitle: '论文数量最多的期刊',
+                    citationChartTitle: '引用次数分布',
+                    citationChartSubtitle: '论文引用数量区间分布',
                     dateField: 'publication_date'
                 }
             },
@@ -739,7 +764,12 @@
                 showsStats: ['unique_categories', 'time_range'],
                 metrics: [],
                 labels: {
+                    papers: '总论文数',
+                    authors: '作者总数',
                     journals: '学科分类数',
+                    itemCount: '论文数量',
+                    categoryChartTitle: '学科分类分布',
+                    categoryChartSubtitle: '按主分类统计论文数量',
                     dateField: 'published'
                 }
             },
@@ -754,7 +784,18 @@
                 venueLabel: '权利人',
                 dateLabel: '授权日期',
                 labels: {
+                    papers: '总专利数',
+                    authors: '发明人总数',
                     journals: '权利人数量',
+                    itemCount: '专利数量',
+                    papersTrendTitle: '专利授权趋势',
+                    papersTrendSubtitle: '按授权日期统计的专利数量',
+                    journalChartTitle: 'TOP 50 权利人分布',
+                    journalChartSubtitle: '专利数量最多的权利人',
+                    citationChartTitle: '被引次数分布',
+                    citationChartSubtitle: '专利被引数量区间分布',
+                    categoryChartTitle: 'CPC 分类分布',
+                    categoryChartSubtitle: '按 CPC 主分类统计专利数量',
                     dateField: 'grant_date'
                 }
             },
@@ -764,7 +805,16 @@
                 showsStats: [],
                 metrics: [],
                 labels: {
+                    papers: '总论文数',
+                    authors: '作者总数',
                     journals: '期刊/会议数',
+                    itemCount: '论文数量',
+                    papersTrendTitle: '论文数量趋势',
+                    papersTrendSubtitle: '按日期统计的论文发表数量',
+                    journalChartTitle: 'TOP 50 期刊/会议分布',
+                    journalChartSubtitle: '论文数量最多的期刊/会议',
+                    citationChartTitle: '引用次数分布',
+                    citationChartSubtitle: '论文引用数量区间分布',
                     dateField: 'mixed'
                 }
             }
@@ -774,6 +824,7 @@
         let allPapers = [];
         let charts = {};
         let currentDataSource = 'all'; // 'all', 'openalex', 'semantic', 'dblp', 'arxiv', 'patents'
+        let latestDataRequestId = 0;
 
         // Toast notification system
         function showToast(message, type = 'info') {
@@ -865,6 +916,24 @@
             refreshData();
         }
 
+        function setStatCardLabel(valueId, labelText) {
+            const valueElement = document.getElementById(valueId);
+            const labelElement = valueElement?.closest('.stat-card')?.querySelector('.stat-label');
+            if (labelElement && labelText) {
+                labelElement.textContent = labelText;
+            }
+        }
+
+        function setChartHeader(cardId, title, subtitle) {
+            const card = document.getElementById(cardId);
+            if (!card) return;
+
+            const titleElement = card.querySelector('.chart-title');
+            const subtitleElement = card.querySelector('.chart-subtitle');
+            if (titleElement && title) titleElement.textContent = title;
+            if (subtitleElement && subtitle) subtitleElement.textContent = subtitle;
+        }
+
         // 统一的UI更新函数 - 配置驱动
         function updateUIForDataSource(source) {
             const config = DATA_SOURCE_CONFIG[source] || DATA_SOURCE_CONFIG['all'];
@@ -901,13 +970,15 @@
             });
 
             // 更新统计卡片标签
-            const journalsCard = document.getElementById('totalJournals');
-            if (journalsCard) {
-                const label = journalsCard.closest('.stat-card')?.querySelector('.stat-label');
-                if (label && config.labels.journals) {
-                    label.textContent = config.labels.journals;
-                }
-            }
+            setStatCardLabel('totalPapers', config.labels.papers);
+            setStatCardLabel('totalAuthors', config.labels.authors);
+            setStatCardLabel('totalJournals', config.labels.journals);
+
+            // 更新图表标题和副标题
+            setChartHeader('papersTrendCard', config.labels.papersTrendTitle, config.labels.papersTrendSubtitle);
+            setChartHeader('journalDistCard', config.labels.journalChartTitle, config.labels.journalChartSubtitle);
+            setChartHeader('citationDistCard', config.labels.citationChartTitle, config.labels.citationChartSubtitle);
+            setChartHeader('categoryChartCard', config.labels.categoryChartTitle, config.labels.categoryChartSubtitle);
 
             // 显示/隐藏统计卡片
             updateStatsVisibility(config.showsStats);
@@ -941,13 +1012,15 @@
 
         // Load all data
         async function loadAllData() {
+            const requestId = ++latestDataRequestId;
+            const requestedSource = currentDataSource;
             try {
                 updateLoading('正在从服务器获取聚合数据...');
 
                 // 根据数据源构建URL
                 let url = '/api/aggregated';
-                if (currentDataSource !== 'all') {
-                    url += `?source=${currentDataSource}`;
+                if (requestedSource !== 'all') {
+                    url += `?source=${requestedSource}`;
                 } else {
                     url += `?source=all`;
                 }
@@ -959,6 +1032,10 @@
                 }
 
                 const data = await response.json();
+                if (requestId !== latestDataRequestId) {
+                    console.log(`忽略过期数据源响应: ${requestedSource}`);
+                    return;
+                }
 
                 if (data.success || data.statistics) {
                     updateLoading('正在处理数据...');
@@ -968,6 +1045,10 @@
                     throw new Error('获取数据失败：无效的响应格式');
                 }
             } catch (error) {
+                if (requestId !== latestDataRequestId) {
+                    console.log(`忽略过期数据源错误: ${requestedSource}`);
+                    return;
+                }
                 console.error('Error loading data:', error);
                 showError('数据加载失败，请检查网络连接或稍后重试', error);
                 updateLoading('数据加载失败');
@@ -1085,12 +1166,12 @@
                 }
 
                 if (config.showsCharts.includes('journal') && Object.keys(data.top_journals).length > 0) {
-                    chartsToCreate.push(createJournalDistChartFromAggregated(data.top_journals));
+                    chartsToCreate.push(createJournalDistChartFromAggregated(data.top_journals, data.source));
                 }
 
                 // 引用分布图表
                 if (config.showsCharts.includes('citation') && Object.keys(data.citations_distribution || {}).length > 0) {
-                    chartsToCreate.push(createCitationDistChartFromAggregated(data.citations_distribution));
+                    chartsToCreate.push(createCitationDistChartFromAggregated(data.citations_distribution, data.source));
                 }
 
                 // OpenAlex特有图表
@@ -1125,6 +1206,17 @@
                             renderTimelineChart(data.papers_by_date);
                         } catch (e) {
                             console.error('渲染时间趋势图失败:', e);
+                        }
+                    }
+                }
+
+                // Patents特有图表
+                if (data.source === 'patents') {
+                    if (config.showsCharts.includes('category') && Object.keys(data.ccf_class_distribution || {}).length > 0) {
+                        try {
+                            renderCategoryChart(data.ccf_class_distribution, 'Top 20 CPC 分类');
+                        } catch (e) {
+                            console.error('渲染CPC分类分布图失败:', e);
                         }
                     }
                 }
@@ -1170,6 +1262,7 @@
 
         // Papers trend chart from aggregated data
         function createPapersTrendChartFromAggregated(papersByDate, source) {
+            const config = DATA_SOURCE_CONFIG[source] || DATA_SOURCE_CONFIG['all'];
             // 调试：输出原始数据
             console.log('createPapersTrendChartFromAggregated - 原始数据:', papersByDate);
             console.log('数据源:', source);
@@ -1206,7 +1299,7 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: '论文数量',
+                        label: config.labels.itemCount || '论文数量',
                         data: data,
                         borderColor: '#2563eb',
                         backgroundColor: 'rgba(37, 99, 235, 0.1)',
@@ -1241,7 +1334,8 @@
         }
 
         // Citation distribution from aggregated data
-        function createCitationDistChartFromAggregated(citationDist) {
+        function createCitationDistChartFromAggregated(citationDist, source = currentDataSource) {
+            const config = DATA_SOURCE_CONFIG[source] || DATA_SOURCE_CONFIG['all'];
             const ranges = ['0', '1-5', '6-10', '11-20', '21-50', '51-100', '101-500', '500+'];
             const counts = ranges.map(r => citationDist[r] || 0);
 
@@ -1253,7 +1347,7 @@
                 data: {
                     labels: ranges,
                     datasets: [{
-                        label: '论文数量',
+                        label: config.labels.itemCount || '论文数量',
                         data: counts,
                         backgroundColor: [
                             '#e2e8f0',
@@ -1297,7 +1391,8 @@
         }
 
         // Journal distribution from aggregated data
-        function createJournalDistChartFromAggregated(journals) {
+        function createJournalDistChartFromAggregated(journals, source = currentDataSource) {
+            const config = DATA_SOURCE_CONFIG[source] || DATA_SOURCE_CONFIG['all'];
             // 按数量从大到小排序，取Top50
             const sorted = Object.entries(journals)
                 .sort((a, b) => b[1] - a[1])
@@ -1311,7 +1406,7 @@
                 data: {
                     labels: sorted.map(x => x[0]),
                     datasets: [{
-                        label: '论文数量',
+                        label: config.labels.itemCount || '论文数量',
                         data: sorted.map(x => x[1]),
                         backgroundColor: '#2563eb'
                     }]
@@ -1332,7 +1427,7 @@
                         legend: { display: false },
                         title: {
                             display: true,
-                            text: `TOP 50 期刊分布`,
+                            text: config.labels.journalChartTitle || 'TOP 50 期刊分布',
                             font: { size: 14 }
                         }
                     },
@@ -1670,7 +1765,7 @@
         }
 
         // Render arXiv category distribution chart (Pie chart)
-        function renderCategoryChart(data) {
+        function renderCategoryChart(data, title = 'Top 15 学科分类') {
             try {
                 if (!data || Object.keys(data).length === 0) {
                     showWarning('没有可用的分类数据');
@@ -1718,7 +1813,7 @@
                             },
                             title: {
                                 display: true,
-                                text: 'Top 15 学科分类',
+                                text: title,
                                 font: {
                                     size: 14,
                                     weight: '600'

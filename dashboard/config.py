@@ -28,8 +28,8 @@ TABLES = {
     'patents': 'patent_db.patents' # 专利数据表
 }
 
-# 默认数据表
-DEFAULT_TABLE = 'openalex'
+# 默认数据表。dashboard 默认展示全部数据。
+DEFAULT_TABLE = 'all'
 
 # Flask服务配置
 FLASK_CONFIG = {

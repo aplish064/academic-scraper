@@ -179,12 +179,12 @@ class QueryBuilder:
             return f"""
                 SELECT
                     {formatted_date} as date,
-                    count(DISTINCT {doi_field}) as count
+                    count() as count
                 FROM patent_db.{adapter.get_table()}
                 WHERE {date_field} > toDate('1970-01-01')
                 GROUP BY {formatted_date}
                 ORDER BY date DESC
-                SETTINGS max_threads=1
+                SETTINGS max_threads=8
             """
 
         if group_by_date:
@@ -196,7 +196,7 @@ class QueryBuilder:
                 WHERE {date_field} != '' AND length({date_field}) > 0
                 GROUP BY {formatted_date}
                 ORDER BY date DESC
-                SETTINGS max_threads=1
+                SETTINGS max_threads=8
             """
         else:
             return f"""
@@ -261,7 +261,7 @@ class QueryBuilder:
         if not citation_field or not doi_field:
             return None
 
-        count_expr = f"count(DISTINCT {doi_field})" if getattr(adapter, 'source_name', '') == 'patents' else f"uniqHLL12({doi_field})"
+        count_expr = "count()" if getattr(adapter, 'source_name', '') == 'patents' else f"uniqHLL12({doi_field})"
 
         database = "patent_db" if getattr(adapter, 'source_name', '') == 'patents' else "academic_db"
 
@@ -281,7 +281,7 @@ class QueryBuilder:
             FROM {database}.{adapter.get_table()}
             GROUP BY range
             ORDER BY range
-            SETTINGS max_threads=4, max_execution_time=60
+            SETTINGS max_threads=8, max_execution_time=60
         """
 
     def execute_query(self, sql: str) -> Optional[Any]:

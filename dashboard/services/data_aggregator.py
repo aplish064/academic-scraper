@@ -3,6 +3,7 @@
 使用适配器模式重构数据聚合逻辑
 """
 import time
+import threading
 from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from adapters import get_adapter
@@ -28,6 +29,10 @@ class DataSourceAggregator:
         self.get_ch_client = ch_client_getter
         self.cache_manager = cache_manager or CacheManager()
         self.query_builder = QueryBuilder(ch_client_getter)
+        self._refresh_lock = threading.Lock()
+        self._refreshing_sources = set()
+        self._source_locks_lock = threading.Lock()
+        self._source_locks = {}
 
     def get_single_source_data(self, source: str) -> Dict:
         """
@@ -51,6 +56,43 @@ class DataSourceAggregator:
         if cached:
             return cached
 
+        get_stale_source_data = getattr(self.cache_manager, 'get_stale_source_data', None)
+        stale = get_stale_source_data(source) if get_stale_source_data else None
+        if stale:
+            self._refresh_source_cache_async(source)
+            return stale
+
+        get_source_data_from_all = getattr(self.cache_manager, 'get_source_data_from_all', None)
+        all_snapshot = get_source_data_from_all(source) if get_source_data_from_all else None
+        if all_snapshot:
+            return all_snapshot
+
+        source_lock = self._get_source_lock(source)
+        with source_lock:
+            cached = self.cache_manager.get_source_data(source)
+            if cached:
+                return cached
+
+            stale = get_stale_source_data(source) if get_stale_source_data else None
+            if stale:
+                self._refresh_source_cache_async(source)
+                return stale
+
+            all_snapshot = get_source_data_from_all(source) if get_source_data_from_all else None
+            if all_snapshot:
+                return all_snapshot
+
+            return self._query_single_source_data(source, adapter)
+
+    def _get_source_lock(self, source: str) -> threading.Lock:
+        """获取单数据源冷查询锁，避免并发重复重聚合"""
+        with self._source_locks_lock:
+            if source not in self._source_locks:
+                self._source_locks[source] = threading.Lock()
+            return self._source_locks[source]
+
+    def _query_single_source_data(self, source: str, adapter) -> Dict:
+        """同步查询单个数据源并写入缓存"""
         # 查询数据库
         result = {
             'papers_by_date': {},
@@ -125,11 +167,40 @@ class DataSourceAggregator:
             print(f"❌ 查询失败: {e}")
             return self.get_empty_source_data(source, error=str(e))
 
+    def _refresh_source_cache_async(self, source: str) -> None:
+        """后台刷新stale数据源缓存，避免请求线程等待慢查询"""
+        with self._refresh_lock:
+            if source in self._refreshing_sources:
+                return
+            self._refreshing_sources.add(source)
+
+        thread = threading.Thread(
+            target=self._refresh_source_cache,
+            args=(source,),
+            daemon=True
+        )
+        thread.start()
+
+    def _refresh_source_cache(self, source: str) -> None:
+        try:
+            adapter = get_adapter(source)
+            if not adapter:
+                return
+
+            print(f"🔄 后台刷新缓存：{source}")
+            self._query_single_source_data(source, adapter)
+        finally:
+            with self._refresh_lock:
+                self._refreshing_sources.discard(source)
+
     def query_statistics(self, source: str) -> Dict:
         """查询统计数据"""
         adapter = get_adapter(source)
         if not adapter:
             return self.get_empty_statistics()
+
+        if source == 'openalex':
+            return self.query_openalex_statistics(adapter)
 
         sql = adapter.get_statistics_sql()
         result = self.query_builder.execute_query(sql)
@@ -151,6 +222,66 @@ class DataSourceAggregator:
             }
 
         return self.get_empty_statistics()
+
+    def _query_scalar(self, sql: str, default=0):
+        """执行单值查询，失败时返回默认值"""
+        result = self.query_builder.execute_query(sql)
+        if not result or not getattr(result, 'result_rows', None):
+            return default
+
+        value = result.result_rows[0][0]
+        if value is None or value != value:
+            return default
+        return value
+
+    def query_openalex_statistics(self, adapter) -> Dict:
+        """查询OpenAlex统计数据。
+
+        OpenAlex 表很大，单条多子查询SQL在API进程内容易触发30秒超时；
+        拆成独立标量查询后，每个指标可以按ClickHouse自己的计划执行，
+        避免统计总览整体失败导致source缓存无法写入。
+        """
+        table = f"academic_db.{adapter.get_table()}"
+        settings = "SETTINGS max_threads=16, max_execution_time=30"
+        heavy_settings = "SETTINGS max_threads=16, max_execution_time=60"
+
+        total_papers = self._query_scalar(
+            f"SELECT uniqHLL12(doi) FROM {table} WHERE doi != '' {settings}",
+            0
+        )
+        unique_authors = self._query_scalar(
+            f"SELECT uniq(cityHash64(author_id)) FROM {table} WHERE author_id != '' {heavy_settings}",
+            0
+        )
+        unique_journals = self._query_scalar(
+            f"SELECT uniqHLL12(journal) FROM {table} WHERE journal != '' {settings}",
+            0
+        )
+        unique_institutions = self._query_scalar(
+            f"SELECT uniq(institution_name) FROM {table} WHERE institution_name != '' {heavy_settings}",
+            0
+        )
+        fwci_sum = self._query_scalar(
+            f"SELECT sum(if(isFinite(fwci) and fwci > 0, fwci, 0)) FROM {table} {settings}",
+            0
+        )
+        fwci_count = self._query_scalar(
+            f"SELECT countIf(fwci > 0) FROM {table} {settings}",
+            0
+        )
+
+        fwci_sum = float(fwci_sum) if fwci_sum else 0
+        fwci_count = int(fwci_count) if fwci_count else 0
+        avg_fwci = round(fwci_sum / fwci_count, 2) if fwci_count > 0 else 0
+
+        return {
+            'total_papers': int(total_papers) if total_papers else 0,
+            'unique_authors': int(unique_authors) if unique_authors else 0,
+            'unique_journals': int(unique_journals) if unique_journals else 0,
+            'unique_institutions': int(unique_institutions) if unique_institutions else 0,
+            'high_citations': 0,
+            'avg_fwci': avg_fwci
+        }
 
     def query_papers_by_date(self, source: str) -> Dict[str, int]:
         """查询按日期统计的论文数"""
@@ -279,13 +410,13 @@ class DataSourceAggregator:
     def query_patent_metrics(self, result: Dict):
         """查询专利特有指标"""
         cpc_sql = """
-            SELECT cpc_group, count(DISTINCT patent_id) AS count
+            SELECT cpc_group, count() AS count
             FROM patent_db.patent_cpc
             WHERE cpc_group != ''
             GROUP BY cpc_group
             ORDER BY count DESC
             LIMIT 20
-            SETTINGS max_threads=4, max_execution_time=30
+            SETTINGS max_threads=4, max_execution_time=60
         """
         query_result = self.query_builder.execute_query(cpc_sql)
         if query_result and query_result.result_rows:
@@ -419,29 +550,27 @@ class DataSourceAggregator:
         cached_all = self.cache_manager.get_source_data('all')
         if cached_all:
             print("🚀 从缓存获取全部数据（包含跨源去重统计，无需重新查询）")
-            return cached_all
+            return self._hydrate_all_statistics_from_sources(cached_all)
 
-        # 缓存不存在，重新构建
-        print("💾 缓存未命中，重新构建全部数据...")
+        get_stale_source_data = getattr(self.cache_manager, 'get_stale_source_data', None)
+        stale_all = get_stale_source_data('all') if get_stale_source_data else None
+        if stale_all:
+            print("♻️  从stale缓存获取全部数据")
+            return self._hydrate_all_statistics_from_sources(stale_all)
 
-        # 先尝试从单个源缓存合并（快速路径）
-        merged_from_cache = self.cache_manager.get_merged_data()
+        print("💾 all缓存未命中，使用已有单源缓存快速合并...")
+
+        get_available_merged_data = getattr(self.cache_manager, 'get_available_merged_data', None)
+        merged_from_cache = get_available_merged_data() if get_available_merged_data else self.cache_manager.get_merged_data()
         if merged_from_cache:
-            print("🎯 从单个源缓存合并数据...")
-            # 更新跨源去重统计（使用返回值）
-            merged_from_cache = self.update_cross_source_statistics(merged_from_cache)
+            print("🎯 从已有单源缓存合并全部数据，跳过请求线程内的大表重聚合")
+            merged_from_cache['source'] = 'all'
+            merged_from_cache['table'] = 'all'
         else:
-            print("🔄 单个源缓存不完整，重新查询所有数据源...")
-            # 缓存不完整，重新查询所有数据源（使用并行查询）
-            sources_data = self._query_all_sources_parallel()
+            print("⚠️  单源缓存为空，返回空的all数据，避免代理超时")
+            merged_from_cache = self.get_empty_source_data('all')
 
-            # 合并数据
-            merged_from_cache = self.cache_manager.merge_sources_data(list(sources_data.values()))
-
-            # 更新跨源去重统计（使用返回值）
-            merged_from_cache = self.update_cross_source_statistics(merged_from_cache)
-
-        # 保存到缓存（使用更长的TTL：15分钟）
+        # 保存到缓存；后续请求直接命中，不在请求线程里跑重查询。
         self.cache_manager.set_source_data('all', merged_from_cache, ttl=900)
 
         print("="*60)
@@ -449,6 +578,34 @@ class DataSourceAggregator:
         print("="*60 + "\n")
 
         return merged_from_cache
+
+    def _hydrate_all_statistics_from_sources(self, all_data: Dict) -> Dict:
+        """用已缓存的单源指标补齐all缓存中的OpenAlex专属统计。"""
+        if not all_data or all_data.get('source') != 'all':
+            return all_data
+
+        result = all_data.copy()
+        stats = result.get('statistics', {}).copy()
+        result['statistics'] = stats
+
+        openalex_data = self.cache_manager.get_source_data('openalex')
+        if not openalex_data:
+            get_stale_source_data = getattr(self.cache_manager, 'get_stale_source_data', None)
+            openalex_data = get_stale_source_data('openalex') if get_stale_source_data else None
+
+        openalex_stats = (openalex_data or {}).get('statistics', {})
+        if openalex_stats:
+            if not stats.get('unique_institutions'):
+                stats['unique_institutions'] = openalex_stats.get('unique_institutions', 0)
+            if not stats.get('avg_fwci'):
+                stats['avg_fwci'] = openalex_stats.get('avg_fwci', 0)
+
+            source_data = result.get('_source_data')
+            if isinstance(source_data, dict):
+                result['_source_data'] = source_data.copy()
+                result['_source_data']['openalex'] = openalex_data
+
+        return result
 
     def update_cross_source_statistics(self, merged_data: Dict) -> Dict:
         """

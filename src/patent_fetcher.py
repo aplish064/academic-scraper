@@ -353,7 +353,7 @@ def normalize_date(value: Any) -> Optional[date]:
 
 def normalize_clickhouse_nullable_date(value: Any) -> Optional[date]:
     parsed = normalize_date(value)
-    if parsed is None or parsed.year < 1970:
+    if parsed is None or parsed < date(1970, 1, 1) or parsed > date(2149, 6, 6):
         return None
     return parsed
 

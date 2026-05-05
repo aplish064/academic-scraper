@@ -16,14 +16,13 @@ class OpenAlexAdapter(DataSourceAdapter):
         """获取统计查询SQL"""
         return """
             SELECT
-                uniqHLL12(doi) as total_papers,
-                uniqHLL12(author_id) as unique_authors,
-                uniqHLL12(journal) as unique_journals,
-                uniqHLL12(institution_name) as unique_institutions,
-                sum(if(isFinite(fwci) and fwci > 0, fwci, 0)) as fwci_sum,
-                countIf(fwci > 0) as fwci_count
-            FROM academic_db.OpenAlex
-            SETTINGS max_threads=4, max_execution_time=30
+                (SELECT uniqHLL12(doi) FROM academic_db.OpenAlex WHERE doi != '') as total_papers,
+                (SELECT uniq(cityHash64(author_id)) FROM academic_db.OpenAlex WHERE author_id != '') as unique_authors,
+                (SELECT uniqHLL12(journal) FROM academic_db.OpenAlex WHERE journal != '') as unique_journals,
+                (SELECT uniq(institution_name) FROM academic_db.OpenAlex WHERE institution_name != '') as unique_institutions,
+                (SELECT sum(if(isFinite(fwci) and fwci > 0, fwci, 0)) FROM academic_db.OpenAlex) as fwci_sum,
+                (SELECT countIf(fwci > 0) FROM academic_db.OpenAlex) as fwci_count
+            SETTINGS max_threads=16, max_execution_time=60
         """
 
     def get_date_field(self) -> str:

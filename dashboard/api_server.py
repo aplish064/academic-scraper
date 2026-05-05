@@ -2,10 +2,10 @@
 """
 学术数据看板API服务器 - 支持Redis缓存和去重统计
 - 使用适配器模式支持动态添加数据源
-- 启动时预加载所有数据源缓存
-- 后台线程每2分钟自动刷新缓存
+- 缓存按需生成；可通过环境变量打开预加载和后台刷新
 """
 
+import os
 import time
 import json
 import threading
@@ -31,6 +31,9 @@ CORS(app)
 ch_client = None
 redis_client = None
 USE_CACHE = True
+PRELOAD_CACHE = os.getenv("DASHBOARD_PRELOAD_CACHE", "0").lower() in {"1", "true", "yes"}
+REFRESH_CACHE = os.getenv("DASHBOARD_REFRESH_CACHE", "0").lower() in {"1", "true", "yes"}
+CLEAR_CACHE_ON_START = os.getenv("DASHBOARD_CLEAR_CACHE_ON_START", "0").lower() in {"1", "true", "yes"}
 
 # 新架构组件
 cache_manager = None
@@ -38,7 +41,7 @@ data_aggregator = None
 query_builder = None
 
 # 缓存刷新间隔（秒）
-CACHE_REFRESH_INTERVAL = 120  # 2分钟
+CACHE_REFRESH_INTERVAL = int(os.getenv("DASHBOARD_CACHE_REFRESH_INTERVAL", "900"))
 
 # 后台刷新线程
 cache_refresh_thread = None
@@ -292,16 +295,24 @@ def query_arxiv_papers_by_month():
 
 def get_aggregated_data_arxiv():
     """获取arxiv聚合数据"""
-    # 尝试从缓存获取
-    cache_key = get_cache_key('arxiv')
-    cached_data = get_from_cache(cache_key)
-    if cached_data:
-        print(f"🎯 命中arxiv缓存!")
-        return cached_data
+    if cache_manager:
+        cached_data = cache_manager.get_source_data('arxiv')
+        if cached_data:
+            print("🎯 命中arxiv缓存!")
+            return cached_data
+
+        stale_data = cache_manager.get_stale_source_data('arxiv')
+        if stale_data:
+            return stale_data
+    else:
+        cache_key = get_cache_key('arxiv')
+        cached_data = get_from_cache(cache_key)
+        if cached_data:
+            print(f"🎯 命中arxiv缓存!")
+            return cached_data
 
     print(f"🔄 查询arxiv数据库...")
 
-    # 查询数据库
     try:
         aggregated_data = {
             'category_distribution': query_arxiv_category_distribution(),
@@ -311,8 +322,10 @@ def get_aggregated_data_arxiv():
             'table': 'arxiv'
         }
 
-        # 写入缓存
-        set_to_cache(cache_key, aggregated_data, ttl=120)
+        if cache_manager:
+            cache_manager.set_source_data('arxiv', aggregated_data)
+        else:
+            set_to_cache(get_cache_key('arxiv'), aggregated_data, ttl=3600)
 
         return aggregated_data
     except Exception as e:
@@ -331,7 +344,6 @@ def get_aggregated_data_arxiv():
             'source': 'arxiv',
             'table': 'arxiv'
         }
-
 
 # 旧函数已删除 - 功能已由 CacheManager 替代
 
@@ -874,8 +886,8 @@ if __name__ == '__main__':
 
     print("🌐 服务启动在 http://0.0.0.0:8080")
 
-    # 启动时清除所有缓存
-    if USE_CACHE:
+    # 启动时清除所有缓存（默认关闭，避免首屏冷启动重查大表）
+    if USE_CACHE and CLEAR_CACHE_ON_START:
         print("\n" + "="*60)
         print("🔄 清除启动时的旧缓存...")
         print("="*60)
@@ -885,8 +897,8 @@ if __name__ == '__main__':
         cache_manager.delete_cache('all')
         print("="*60 + "\n")
 
-    # 设置缓存预加载和后台刷新（在Flask启动后自动执行）
-    if USE_CACHE:
+    # 设置缓存预加载和后台刷新（默认关闭，避免大表查询拖慢首屏）
+    if USE_CACHE and (PRELOAD_CACHE or REFRESH_CACHE):
         from threading import Timer
 
         def delayed_cache_init():
@@ -894,18 +906,19 @@ if __name__ == '__main__':
             # 等待Flask完全启动
             time.sleep(5)
 
-            print("\n" + "="*60)
-            print("🚀 启动缓存预加载...")
-            print("="*60)
-            preload_all_caches()
+            if PRELOAD_CACHE:
+                print("\n" + "="*60)
+                print("🚀 启动缓存预加载...")
+                print("="*60)
+                preload_all_caches()
 
-            # 启动后台缓存刷新线程
-            print("\n" + "="*60)
-            print("🔄 启动后台缓存刷新线程...")
-            print("="*60)
-            start_cache_refresh_thread()
-            print("✅ 缓存将每2分钟自动刷新")
-            print("="*60 + "\n")
+            if REFRESH_CACHE:
+                print("\n" + "="*60)
+                print("🔄 启动后台缓存刷新线程...")
+                print("="*60)
+                start_cache_refresh_thread()
+                print(f"✅ 缓存将每{CACHE_REFRESH_INTERVAL}秒自动刷新")
+                print("="*60 + "\n")
 
         # 立即启动Timer，在app.run()执行时开始计时
         cache_timer = Timer(0, delayed_cache_init)

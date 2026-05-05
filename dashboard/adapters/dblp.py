@@ -16,14 +16,13 @@ class DBLPAdapter(DataSourceAdapter):
         """获取统计查询SQL"""
         return """
             SELECT
-                uniqHLL12(doi) as total_papers,
-                uniqHLL12(author_name) as unique_authors,
-                uniqHLL12(venue) as unique_journals,
+                (SELECT uniqHLL12(doi) FROM academic_db.dblp WHERE doi != '') as total_papers,
+                (SELECT uniqHLL12(author_name) FROM academic_db.dblp WHERE author_name != '') as unique_authors,
+                (SELECT uniqHLL12(venue) FROM academic_db.dblp WHERE venue != '') as unique_journals,
                 0 as unique_institutions,
                 0 as high_citations,
                 0 as avg_fwci
-            FROM academic_db.dblp
-            SETTINGS max_threads=1, max_execution_time=30
+            SETTINGS max_threads=4, max_execution_time=30
         """
 
     def get_date_field(self) -> str:

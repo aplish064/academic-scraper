@@ -15,7 +15,7 @@ class PatentsAdapter(DataSourceAdapter):
     def get_statistics_sql(self) -> str:
         return """
             SELECT
-                (SELECT count(DISTINCT patent_id) FROM patent_db.patents) as total_papers,
+                (SELECT count() FROM patent_db.patents) as total_papers,
                 (
                     SELECT uniqHLL12(inventor_name)
                     FROM patent_db.patent_inventors

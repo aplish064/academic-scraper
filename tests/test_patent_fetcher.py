@@ -190,6 +190,17 @@ class PatentFetcherBulkTests(unittest.TestCase):
         self.assertIsNone(row["application_date"])
         self.assertEqual(row["series_code"], "06")
 
+    def test_parse_application_row_nulls_dates_above_clickhouse_date_range(self):
+        row = patent_fetcher.parse_application_row({
+            "patent_id": "3943504",
+            "application_id": "05552832",
+            "filing_date": "2975-02-25",
+            "series_code": "05",
+        })
+
+        self.assertEqual(row["patent_id"], "US-3943504")
+        self.assertIsNone(row["application_date"])
+
     def test_parse_inventor_row_maps_disambiguated_bulk_fields(self):
         row = patent_fetcher.parse_inventor_row({
             "patent_id": "D1006496",
