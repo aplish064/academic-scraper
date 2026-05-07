@@ -72,6 +72,9 @@ MAX_RETRIES = 3
 # 查询配置
 PAPERS_PER_REQUEST = 100
 MAX_PAGES_PER_JOURNAL = None  # None = 无限制
+MAX_OFFSET_EXCLUSIVE = 1000   # 语义学术搜索 offset 上限（offset >= 1000 会 400）
+PROGRESS_SAVE_EVERY_PAGES = 5 # 每处理 N 页落盘一次，减少进度文件 IO
+INSERT_FLUSH_ROWS = 5000      # 累积到 N 行后批量写入 ClickHouse
 
 # 字段列表
 FIELDS = "paperId,title,authors,year,venue,journal,publicationDate,citationCount,externalIds,url,abstract"
@@ -87,6 +90,8 @@ headers = {
     "x-api-key": API_KEY,
     "Content-Type": "application/json"
 }
+session = requests.Session()
+session.headers.update(headers)
 
 
 # ============ 工具函数 ============
@@ -113,42 +118,77 @@ def log_message(message: str, level: str = "INFO"):
             f.write(log_line)
 
 
-def make_request(url: str, params: dict, retry_count: int = 0) -> Optional[dict]:
-    """发送 HTTP 请求，带有重试机制"""
-    try:
-        response = requests.get(url, headers=headers, params=params,
-                               timeout=REQUEST_TIMEOUT)
+def make_request(url: str, params: dict) -> Optional[dict]:
+    """发送 HTTP 请求，带有重试机制。"""
+    for retry_count in range(MAX_RETRIES + 1):
+        try:
+            response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
 
-        if response.status_code == 429:
-            log_message(f"速率限制，暂停60秒", "WARNING")
-            time.sleep(60)
-            if retry_count < MAX_RETRIES:
-                return make_request(url, params, retry_count + 1)
-            return None
+            if response.status_code == 429:
+                wait_seconds = 60
+                retry_after = response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait_seconds = max(1, int(retry_after))
+                    except (TypeError, ValueError):
+                        wait_seconds = 60
+                log_message(f"速率限制，暂停{wait_seconds}秒", "WARNING")
+                time.sleep(wait_seconds)
+                continue
 
-        if response.status_code != 200:
-            if retry_count < MAX_RETRIES:
-                wait_time = (2 ** retry_count) * 2
-                time.sleep(wait_time)
-                return make_request(url, params, retry_count + 1)
-            else:
-                log_message(f"请求失败: HTTP {response.status_code}", "ERROR")
+            if response.status_code == 400:
+                # 语义学术搜索常见：offset 到达上限会直接 400，这不是瞬时错误，没必要重试。
+                log_message(f"请求失败: HTTP 400 ({response.text[:120]})", "WARNING")
                 return None
 
-        return response.json()
+            if response.status_code != 200:
+                if retry_count >= MAX_RETRIES:
+                    log_message(f"请求失败: HTTP {response.status_code}", "ERROR")
+                    return None
+                wait_time = (2 ** retry_count) * 2
+                time.sleep(wait_time)
+                continue
 
-    except requests.exceptions.Timeout:
-        log_message(f"请求超时", "WARNING")
-        if retry_count < MAX_RETRIES:
+            return response.json()
+
+        except requests.exceptions.Timeout:
+            log_message("请求超时", "WARNING")
+            if retry_count >= MAX_RETRIES:
+                return None
             time.sleep(5)
-            return make_request(url, params, retry_count + 1)
-        return None
-    except Exception as e:
-        log_message(f"请求异常: {e}", "ERROR")
-        if retry_count < MAX_RETRIES:
+            continue
+        except Exception as e:
+            log_message(f"请求异常: {e}", "ERROR")
+            if retry_count >= MAX_RETRIES:
+                return None
             time.sleep(5)
-            return make_request(url, params, retry_count + 1)
-        return None
+            continue
+
+    return None
+
+
+def should_stop_for_offset(page_index: int, page_size: int) -> bool:
+    """检查是否超过 API 可接受的 offset 范围。"""
+    offset = page_index * page_size
+    return offset >= MAX_OFFSET_EXCLUSIVE
+
+
+def flush_buffered_rows(
+    ch_client,
+    buffered_rows: List[Dict[str, Any]],
+    buffered_papers: int,
+    journal_name: str
+) -> Tuple[bool, int, int]:
+    """将缓冲区数据写入数据库。"""
+    if not buffered_rows:
+        return True, 0, 0
+
+    if batch_insert_clickhouse(ch_client, buffered_rows):
+        log_message(f"  💾 批量写入: {journal_name} | 论文{buffered_papers}篇 | {len(buffered_rows)}行")
+        return True, buffered_papers, len(buffered_rows)
+
+    log_message(f"  ❌ 批量写入失败: {journal_name} | 论文{buffered_papers}篇 | {len(buffered_rows)}行", "ERROR")
+    return False, 0, 0
 
 
 # ============ ClickHouse 函数 ============
@@ -541,11 +581,23 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
     total_papers = 0
     total_rows = 0
     current_page = start_page
+    pages_since_progress_save = 0
+    terminated_by_error = False
+    stop_reason = "completed"
+    buffered_rows: List[Dict[str, Any]] = []
+    buffered_papers = 0
 
     while True:
         # 检查页数限制
         if MAX_PAGES_PER_JOURNAL and current_page >= MAX_PAGES_PER_JOURNAL:
             log_message(f"  达到最大页数限制: {MAX_PAGES_PER_JOURNAL}")
+            stop_reason = "max_pages_limit"
+            break
+
+        # 检查 API offset 限制
+        if should_stop_for_offset(current_page, PAPERS_PER_REQUEST):
+            log_message(f"  达到API offset上限: offset={current_page * PAPERS_PER_REQUEST}")
+            stop_reason = "api_offset_limit"
             break
 
         # 构建请求参数
@@ -569,12 +621,15 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
 
         if data is None:
             log_message(f"  第{current_page}页请求失败", "WARNING")
+            terminated_by_error = True
+            stop_reason = "request_failed"
             break
 
         papers = data.get("data", [])
 
         if not papers:
             log_message(f"  第{current_page}页无数据，获取完成")
+            stop_reason = "empty_page"
             break
 
         # 过滤并收集论文
@@ -590,43 +645,80 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
 
         if not page_papers:
             log_message(f"  第{current_page}页无有效论文，获取完成")
+            stop_reason = "no_valid_papers"
             break
 
-        # 插入数据库
+        # 缓冲页面数据
         rows = []
         for paper in page_papers:
             rows.extend(paper_to_rows(paper))
 
-        if rows and batch_insert_clickhouse(ch_client, rows):
-            total_papers += len(page_papers)
-            total_rows += len(rows)
+        if not rows:
+            log_message(f"  第{current_page}页无可写入行，跳过")
+            current_page += 1
+            time.sleep(REQUEST_INTERVAL)
+            continue
 
-            # 更新进度
+        buffered_rows.extend(rows)
+        buffered_papers += len(page_papers)
+        log_message(f"  第{current_page}页: 获取{len(page_papers)}篇论文, 缓冲累计 {buffered_papers}篇/{len(buffered_rows)}行")
+
+        # 达到阈值后统一写入
+        if len(buffered_rows) >= INSERT_FLUSH_ROWS:
+            success, flushed_papers, flushed_rows = flush_buffered_rows(
+                ch_client, buffered_rows, buffered_papers, journal_name
+            )
+            if not success:
+                terminated_by_error = True
+                stop_reason = "insert_failed"
+                break
+
+            total_papers += flushed_papers
+            total_rows += flushed_rows
             update_journal_progress(
                 progress_data, journal_name,
                 status="in_progress",
                 current_page=current_page + 1,
-                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + len(page_papers)
+                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + flushed_papers
             )
-            save_progress(progress_data)
-
-            log_message(f"  第{current_page}页: 获取{len(page_papers)}篇论文, {len(rows)}行")
-        else:
-            log_message(f"  第{current_page}页插入失败", "ERROR")
-            break
+            pages_since_progress_save += 1
+            if pages_since_progress_save >= PROGRESS_SAVE_EVERY_PAGES:
+                save_progress(progress_data)
+                pages_since_progress_save = 0
+            buffered_rows = []
+            buffered_papers = 0
 
         current_page += 1
         time.sleep(REQUEST_INTERVAL)
 
-    # 标记完成
+    # 循环结束后，写入剩余缓冲数据
+    if not terminated_by_error and buffered_rows:
+        success, flushed_papers, flushed_rows = flush_buffered_rows(
+            ch_client, buffered_rows, buffered_papers, journal_name
+        )
+        if not success:
+            terminated_by_error = True
+            stop_reason = "insert_failed"
+        else:
+            total_papers += flushed_papers
+            total_rows += flushed_rows
+            update_journal_progress(
+                progress_data, journal_name,
+                status="in_progress",
+                current_page=current_page,
+                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + flushed_papers
+            )
+
+    # 标记状态
+    final_status = "failed" if terminated_by_error else "completed"
     update_journal_progress(
         progress_data, journal_name,
-        status="completed",
+        status=final_status,
         total_pages=current_page
     )
     save_progress(progress_data)
 
-    log_message(f"✓ {journal_name}: 完成 {total_papers}篇论文")
+    log_message(f"✓ {journal_name}: {final_status} | 论文{total_papers}篇 | 页数{current_page - start_page} | 原因={stop_reason}")
     return total_papers, total_rows
 
 

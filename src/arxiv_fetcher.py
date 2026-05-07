@@ -8,10 +8,12 @@ import requests
 import json
 import time
 import gc
+import os
+import random
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import feedparser
 import clickhouse_connect
 from tqdm import tqdm
@@ -28,6 +30,13 @@ MAX_RETRIES = 3               # 最大重试次数
 PER_PAGE = 3000              # 每页论文数
 RATE_LIMIT_WAIT = 60          # 速率限制等待时间（秒）
 TIMEOUT_RETRY_WAIT = 5        # 超时重试等待时间（秒）
+DEFAULT_CONTACT_EMAIL = "academic-scraper@localhost"
+RECOVERY_BASE_WAIT = 300      # 恢复重试基础等待（秒）
+RECOVERY_MAX_WAIT = 3600      # 恢复重试最大等待（秒）
+RECOVERY_MAX_ATTEMPTS = 12    # 恢复重试最大次数
+PROBE_TIMEOUT = 15            # 可用性探测超时（秒）
+PROBE_QUERY = "all:electron"
+DATE_QUERY_FIELD_DEFAULT = "submittedDate"  # 按“当天发表/提交”抓取默认口径
 
 # 时间范围配置
 START_DATE = "2026-04-22"     # 开始日期
@@ -43,6 +52,12 @@ CH_PASSWORD = ''
 
 # 批量插入配置
 BATCH_WRITE_THRESHOLD = 10000  # 每 10000 行写入一次
+ARXIV_TABLE_COLUMNS = [
+    'arxiv_id', 'uid', 'title', 'published', 'updated', 'categories', 'primary_category',
+    'journal_ref', 'comment', 'url', 'pdf_url', 'author', 'rank', 'tag', 'affiliation', 'import_date'
+]
+# 去重键：使用业务内容字段，不包含 import_date
+DEDUP_KEY_COLUMNS = [column for column in ARXIV_TABLE_COLUMNS if column != 'import_date']
 
 # 文件路径配置
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
@@ -168,6 +183,119 @@ def key_to_date(key: str) -> str:
     """将进度文件键转换为日期字符串 (YYYY-MM-DD)"""
     return f"{key[:4]}-{key[4:6]}-{key[6:]}"
 
+
+def build_date_query(date_str: str, date_field: str = DATE_QUERY_FIELD_DEFAULT) -> str:
+    """构建按天查询条件（含整天分钟边界）"""
+    date_key = date_to_key(date_str)
+    return f"{date_field}:[{date_key}0000 TO {date_key}2359]"
+
+
+def build_last_updated_date_query(date_str: str) -> str:
+    """兼容旧调用：构建按天查询的 lastUpdatedDate 条件"""
+    return build_date_query(date_str, "lastUpdatedDate")
+
+
+def get_dates_in_window(date_a: str, date_b: str) -> List[str]:
+    """生成 [min(date_a,date_b), max(date_a,date_b)] 的倒序日期列表（含端点）"""
+    dt_a = datetime.strptime(date_a, '%Y-%m-%d')
+    dt_b = datetime.strptime(date_b, '%Y-%m-%d')
+
+    newer = max(dt_a, dt_b)
+    older = min(dt_a, dt_b)
+
+    dates = []
+    current = newer
+    while current >= older:
+        dates.append(current.strftime('%Y-%m-%d'))
+        current -= timedelta(days=1)
+    return dates
+
+
+def resolve_fetch_options(
+    per_page: Optional[int] = None,
+    request_interval: Optional[float] = None
+) -> tuple:
+    """规范化分页和请求间隔参数"""
+    per_page_value = per_page if per_page and per_page > 0 else PER_PAGE
+    interval_value = request_interval if request_interval is not None and request_interval >= 0 else REQUEST_INTERVAL
+    return per_page_value, interval_value
+
+
+def mark_date_completed(progress_data: dict, date_key: str):
+    """标记日期已完成并落盘"""
+    if date_key not in progress_data['completed_dates']:
+        progress_data['completed_dates'].append(date_key)
+    save_progress(progress_data)
+
+
+def compute_recovery_wait_seconds(attempt: int, base_wait: int = RECOVERY_BASE_WAIT, max_wait: int = RECOVERY_MAX_WAIT) -> int:
+    """指数退避 + 抖动，计算下一次恢复重试等待秒数"""
+    raw_wait = min(base_wait * (2 ** attempt), max_wait)
+    jitter_multiplier = random.uniform(0.8, 1.2)
+    return max(1, min(int(raw_wait * jitter_multiplier), max_wait))
+
+
+def build_request_headers() -> Dict[str, str]:
+    """构建请求头，满足 arXiv API 客户端标识要求"""
+    contact_email = os.getenv("ARXIV_CONTACT_EMAIL", DEFAULT_CONTACT_EMAIL).strip() or DEFAULT_CONTACT_EMAIL
+    user_agent = f"academic-scraper/1.0 (mailto:{contact_email})"
+    return {
+        "User-Agent": user_agent,
+        "Accept": "application/atom+xml",
+    }
+
+
+def build_dedup_insert_sql(temp_table: str) -> str:
+    """构建去重写入 SQL：与目标表反连接，仅插入新记录。"""
+    select_columns = ', '.join([f"tmp.{column}" for column in ARXIV_TABLE_COLUMNS])
+    join_condition = ' AND '.join([f"tmp.{column} = tgt.{column}" for column in DEDUP_KEY_COLUMNS])
+    return f"""
+        INSERT INTO {CH_DATABASE}.{CH_TABLE}
+        SELECT {select_columns}
+        FROM {CH_DATABASE}.{temp_table} tmp
+        LEFT ANTI JOIN {CH_DATABASE}.{CH_TABLE} tgt
+        ON {join_condition}
+    """
+
+
+def check_arxiv_api_available() -> tuple:
+    """轻量探测 arXiv API 可用性，返回 (is_available, retry_after_seconds|None)"""
+    try:
+        response = requests.get(
+            ARXIV_API_BASE,
+            params={"search_query": PROBE_QUERY, "start": 0, "max_results": 1},
+            timeout=PROBE_TIMEOUT,
+            headers=build_request_headers()
+        )
+        if response.status_code == 200:
+            return True, None
+
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            try:
+                retry_seconds = int(retry_after) if retry_after else RATE_LIMIT_WAIT
+            except (TypeError, ValueError):
+                retry_seconds = RATE_LIMIT_WAIT
+            return False, max(1, retry_seconds)
+
+        return False, None
+    except Exception:
+        return False, None
+
+
+def parse_total_results(xml_data: str) -> Optional[int]:
+    """从 arXiv Atom XML 中解析 opensearch:totalResults。"""
+    if not xml_data:
+        return None
+    try:
+        feed = feedparser.parse(xml_data)
+        value = getattr(getattr(feed, "feed", None), "opensearch_totalresults", None)
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
 # =============================================================================
 # HTTP 客户端（带重试机制）
 # =============================================================================
@@ -184,14 +312,25 @@ def make_request(url: str, params: dict) -> Optional[str]:
     """
     for retry_count in range(MAX_RETRIES + 1):
         try:
-            response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            response = requests.get(
+                url,
+                params=params,
+                timeout=REQUEST_TIMEOUT,
+                headers=build_request_headers()
+            )
 
             # 处理速率限制
             if response.status_code == 429:
-                log_message("⚠️  速率限制，暂停 60 秒...", "WARNING")
-                resume_time = datetime.now() + timedelta(seconds=RATE_LIMIT_WAIT)
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    wait_seconds = int(retry_after) if retry_after else RATE_LIMIT_WAIT
+                except (TypeError, ValueError):
+                    wait_seconds = RATE_LIMIT_WAIT
+                wait_seconds = max(wait_seconds, 1)
+                log_message(f"⚠️  速率限制，暂停 {wait_seconds} 秒...", "WARNING")
+                resume_time = datetime.now() + timedelta(seconds=wait_seconds)
                 log_message(f"   将在 {resume_time.strftime('%H:%M:%S')} 恢复", "WARNING")
-                time.sleep(RATE_LIMIT_WAIT)
+                time.sleep(wait_seconds)
                 continue  # 重试
 
             # 处理服务器错误
@@ -592,11 +731,8 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
         # 插入到临时表
         client.insert_df(f'{CH_DATABASE}.{temp_table}', df)
 
-        # 从临时表插入到目标表，使用 DISTINCT 去重
-        client.command(f'''
-            INSERT INTO {CH_DATABASE}.{CH_TABLE}
-            SELECT DISTINCT * FROM {CH_DATABASE}.{temp_table}
-        ''')
+        # 与目标表反连接，只插入不存在的记录（忽略 import_date 差异）
+        client.command(build_dedup_insert_sql(temp_table))
 
         return True
 
@@ -614,7 +750,19 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
 # 论文获取函数
 # =============================================================================
 
-def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
+def fetch_papers_by_date(
+    date_str: str,
+    progress_data: dict,
+    ch_client,
+    per_page: Optional[int] = None,
+    request_interval: Optional[float] = None,
+    dry_run: bool = False,
+    enable_recovery_retry: bool = False,
+    recovery_max_attempts: int = RECOVERY_MAX_ATTEMPTS,
+    recovery_base_wait: int = RECOVERY_BASE_WAIT,
+    recovery_max_wait: int = RECOVERY_MAX_WAIT,
+    date_field: str = DATE_QUERY_FIELD_DEFAULT
+) -> bool:
     """获取指定日期的所有论文
 
     Args:
@@ -637,11 +785,12 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
     try:
         all_papers = []
         start = 0
-        per_page = PER_PAGE
+        per_page_value, interval_value = resolve_fetch_options(per_page, request_interval)
 
-        # 构建查询参数（修复：移除 + 号，使用空格）
+        # 构建查询参数：使用全天分钟边界
         date_key = date_to_key(date_str)
-        search_query = f"lastUpdatedDate:[{date_key} TO {date_key}]"
+        search_query = build_date_query(date_str, date_field)
+        expected_total = None
 
         # 分页获取
         while True:
@@ -649,11 +798,32 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
             params = {
                 "search_query": search_query,
                 "start": start,
-                "max_results": per_page
+                "max_results": per_page_value
             }
 
             # 发送请求
             xml_data = make_request(ARXIV_API_BASE, params)
+
+            if xml_data is None and enable_recovery_retry:
+                for recovery_attempt in range(recovery_max_attempts):
+                    available, retry_after_hint = check_arxiv_api_available()
+                    wait_seconds = compute_recovery_wait_seconds(
+                        recovery_attempt,
+                        base_wait=recovery_base_wait,
+                        max_wait=recovery_max_wait
+                    )
+                    if retry_after_hint is not None:
+                        wait_seconds = max(wait_seconds, retry_after_hint)
+                    status_text = "可用" if available else "不可用"
+                    log_message(
+                        f"⚠️  {date_str}: API探测{status_text}，第 {recovery_attempt + 1}/{recovery_max_attempts} 次恢复等待 {wait_seconds} 秒",
+                        "WARNING"
+                    )
+                    time.sleep(wait_seconds)
+                    xml_data = make_request(ARXIV_API_BASE, params)
+                    if xml_data is not None:
+                        log_message(f"✅ {date_str}: API恢复，继续抓取")
+                        break
 
             if xml_data is None:
                 log_message(f"❌ {date_str}: 获取数据失败", "ERROR")
@@ -661,24 +831,28 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
 
             # 解析 XML
             papers = parse_arxiv_xml(xml_data)
+            if expected_total is None:
+                expected_total = parse_total_results(xml_data)
 
             if not papers:
                 # 没有更多数据
                 break
 
             all_papers.extend(papers)
-            log_message(f"  📄 第 {start // per_page + 1} 页: 获取 {len(papers)} 篇论文")
+            log_message(f"  📄 第 {start // per_page_value + 1} 页: 获取 {len(papers)} 篇论文")
 
             # 检查是否是最后一页
-            if len(papers) < per_page:
+            if len(papers) < per_page_value:
                 break
 
-            start += per_page
-            time.sleep(REQUEST_INTERVAL)
+            start += per_page_value
+            time.sleep(interval_value)
 
         if not all_papers:
-            log_message(f"⚠️  {date_str}: 没有论文数据", "WARNING")
-            return False
+            # 无数据日期视为成功完成，避免重复重试
+            mark_date_completed(progress_data, date_key)
+            log_message(f"ℹ️  {date_str}: 无数据，已标记完成")
+            return True
 
         # 转换为数据库行
         rows = []
@@ -686,8 +860,8 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
             paper_rows = paper_to_rows(paper)
             rows.extend(paper_rows)
 
-        # 批量插入
-        if rows:
+        # 批量插入（dry-run 只验证抓取与解析，不写库）
+        if rows and not dry_run:
             # 分批写入（每 BATCH_WRITE_THRESHOLD 行）
             for i in range(0, len(rows), BATCH_WRITE_THRESHOLD):
                 batch = rows[i:i + BATCH_WRITE_THRESHOLD]
@@ -698,11 +872,17 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
                     return False
 
                 log_message(f"  💾 已写入 {len(batch)} 行")
+        elif dry_run:
+            log_message(f"  🧪 dry-run: 跳过写库，预计 {len(rows)} 行")
 
-        # 全部成功，更新进度（修复：添加重复检查）
-        if date_key not in progress_data['completed_dates']:
-            progress_data['completed_dates'].append(date_key)
-        save_progress(progress_data)
+        # 全部成功，更新进度
+        mark_date_completed(progress_data, date_key)
+
+        if expected_total is not None:
+            status = "匹配" if len(all_papers) == expected_total else "不匹配"
+            log_message(
+                f"  🔎 totalResults={expected_total}, 实际抓取={len(all_papers)} ({status})"
+            )
 
         log_message(f"✅ {date_str}: 完成 {len(all_papers)} 篇论文 → {len(rows)} 行")
         return True
@@ -718,7 +898,24 @@ def fetch_papers_by_date(date_str: str, progress_data: dict, ch_client) -> bool:
 class ArxivFetcher:
     """arXiv 论文获取器"""
 
-    def __init__(self, start_date: str, end_year: int, ch_client=None, test_days=None):
+    def __init__(
+        self,
+        start_date: str,
+        end_year: int,
+        ch_client=None,
+        test_days=None,
+        request_interval: float = REQUEST_INTERVAL,
+        per_page: int = PER_PAGE,
+        dry_run: bool = False,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        respect_progress_in_window: bool = False,
+        enable_recovery_retry: bool = False,
+        recovery_max_attempts: int = RECOVERY_MAX_ATTEMPTS,
+        recovery_base_wait: int = RECOVERY_BASE_WAIT,
+        recovery_max_wait: int = RECOVERY_MAX_WAIT,
+        date_field: str = DATE_QUERY_FIELD_DEFAULT
+    ):
         """初始化
 
         Args:
@@ -732,6 +929,17 @@ class ArxivFetcher:
         self.ch_client = ch_client or create_clickhouse_client()
         self.progress = load_progress()
         self.test_days = test_days
+        self.request_interval = request_interval if request_interval >= 0 else REQUEST_INTERVAL
+        self.per_page = per_page if per_page > 0 else PER_PAGE
+        self.dry_run = dry_run
+        self.from_date = from_date
+        self.to_date = to_date
+        self.respect_progress_in_window = respect_progress_in_window
+        self.enable_recovery_retry = enable_recovery_retry
+        self.recovery_max_attempts = max(0, recovery_max_attempts)
+        self.recovery_base_wait = max(1, recovery_base_wait)
+        self.recovery_max_wait = max(self.recovery_base_wait, recovery_max_wait)
+        self.date_field = date_field if date_field in ("submittedDate", "lastUpdatedDate") else DATE_QUERY_FIELD_DEFAULT
 
     def run(self):
         """执行主流程"""
@@ -742,8 +950,11 @@ class ArxivFetcher:
         log_message("=" * 60)
         log_message(f"开始日期: {self.start_date}")
         log_message(f"结束年份: {self.end_year}")
-        log_message(f"请求间隔: {REQUEST_INTERVAL} 秒")
-        log_message(f"每页论文数: {PER_PAGE}")
+        log_message(f"请求间隔: {self.request_interval} 秒")
+        log_message(f"每页论文数: {self.per_page}")
+        log_message(f"dry-run: {'是' if self.dry_run else '否'}")
+        log_message(f"恢复重试: {'开启' if self.enable_recovery_retry else '关闭'}")
+        log_message(f"日期口径: {self.date_field}")
         log_message("=" * 60)
 
         # 创建表
@@ -754,7 +965,13 @@ class ArxivFetcher:
         create_arxiv_table(self.ch_client)
 
         # 生成日期列表
-        all_dates = get_all_dates_backward(self.start_date, self.end_year)
+        if self.from_date or self.to_date:
+            if not self.from_date or not self.to_date:
+                raise ValueError("窗口模式需要同时指定 --from-date 和 --to-date")
+            all_dates = get_dates_in_window(self.from_date, self.to_date)
+            log_message(f"🎯 窗口重抓模式: {all_dates[-1]} ~ {all_dates[0]}（共 {len(all_dates)} 天）")
+        else:
+            all_dates = get_all_dates_backward(self.start_date, self.end_year)
 
         # 测试模式：限制天数
         if self.test_days:
@@ -763,11 +980,14 @@ class ArxivFetcher:
 
         self.progress['total_dates'] = len(all_dates)
 
-        # 过滤已完成的日期
-        pending_dates = [
-            d for d in all_dates
-            if date_to_key(d) not in self.progress['completed_dates']
-        ]
+        # 过滤待处理日期
+        if self.from_date and self.to_date and not self.respect_progress_in_window:
+            pending_dates = all_dates
+        else:
+            pending_dates = [
+                d for d in all_dates
+                if date_to_key(d) not in self.progress['completed_dates']
+            ]
 
         log_message(f"总日期数: {len(all_dates)}")
         log_message(f"已完成: {len(all_dates) - len(pending_dates)}")
@@ -787,7 +1007,19 @@ class ArxivFetcher:
         # 使用 tqdm 显示进度
         with tqdm(total=len(pending_dates), desc="日期进度", unit="天", ncols=80) as pbar:
             for date_str in pending_dates:
-                success = fetch_papers_by_date(date_str, self.progress, self.ch_client)
+                success = fetch_papers_by_date(
+                    date_str,
+                    self.progress,
+                    self.ch_client,
+                    per_page=self.per_page,
+                    request_interval=self.request_interval,
+                    dry_run=self.dry_run,
+                    enable_recovery_retry=self.enable_recovery_retry,
+                    recovery_max_attempts=self.recovery_max_attempts,
+                    recovery_base_wait=self.recovery_base_wait,
+                    recovery_max_wait=self.recovery_max_wait,
+                    date_field=self.date_field
+                )
 
                 if success:
                     stats['successful_dates'] += 1
@@ -832,6 +1064,22 @@ def main():
                        help='试运行模式，不写入数据库')
     parser.add_argument('--test-days', type=int, default=None,
                        help='测试模式：只获取指定天数的数据')
+    parser.add_argument('--from-date', default=None,
+                       help='窗口模式起始日期 (YYYY-MM-DD)')
+    parser.add_argument('--to-date', default=None,
+                       help='窗口模式结束日期 (YYYY-MM-DD)')
+    parser.add_argument('--respect-progress-in-window', action='store_true',
+                       help='窗口模式下也跳过已完成日期（默认会重抓窗口内全部日期）')
+    parser.add_argument('--recovery-retry', action='store_true',
+                       help='启用可用性探测 + 指数退避 + 长间隔恢复重试')
+    parser.add_argument('--recovery-max-attempts', type=int, default=RECOVERY_MAX_ATTEMPTS,
+                       help='恢复重试最大次数')
+    parser.add_argument('--recovery-base-wait', type=int, default=RECOVERY_BASE_WAIT,
+                       help='恢复重试基础等待秒数')
+    parser.add_argument('--recovery-max-wait', type=int, default=RECOVERY_MAX_WAIT,
+                       help='恢复重试最大等待秒数')
+    parser.add_argument('--date-field', choices=['submittedDate', 'lastUpdatedDate'], default=DATE_QUERY_FIELD_DEFAULT,
+                       help='按天抓取口径：submittedDate(当天提交) 或 lastUpdatedDate(当天更新)')
 
     args = parser.parse_args()
 
@@ -840,7 +1088,22 @@ def main():
 
     try:
         # 创建 fetcher
-        fetcher = ArxivFetcher(args.start_date, args.end_year, test_days=args.test_days)
+        fetcher = ArxivFetcher(
+            args.start_date,
+            args.end_year,
+            test_days=args.test_days,
+            request_interval=args.interval,
+            per_page=args.per_page,
+            dry_run=args.dry_run,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            respect_progress_in_window=args.respect_progress_in_window,
+            enable_recovery_retry=args.recovery_retry,
+            recovery_max_attempts=args.recovery_max_attempts,
+            recovery_base_wait=args.recovery_base_wait,
+            recovery_max_wait=args.recovery_max_wait,
+            date_field=args.date_field
+        )
 
         # 运行
         fetcher.run()
