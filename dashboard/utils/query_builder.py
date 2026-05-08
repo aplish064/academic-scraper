@@ -261,6 +261,46 @@ class QueryBuilder:
         if not citation_field or not doi_field:
             return None
 
+        if getattr(adapter, 'source_name', '') == 'patents':
+            return """
+                SELECT range, sum(count) AS count
+                FROM (
+                    SELECT
+                        '0' AS range,
+                        toUInt64(greatest(
+                            toInt64((SELECT count() FROM patent_db.patents)) -
+                            toInt64((
+                                SELECT uniqExact(patent_id)
+                                FROM patent_db.patent_citations
+                                WHERE patent_id != ''
+                            )),
+                            0
+                        )) AS count
+                    UNION ALL
+                    SELECT
+                        multiIf(
+                            citation_count < 6, '1-5',
+                            citation_count < 11, '6-10',
+                            citation_count < 21, '11-20',
+                            citation_count < 51, '21-50',
+                            citation_count < 101, '51-100',
+                            citation_count < 501, '101-500',
+                            '500+'
+                        ) AS range,
+                        count() AS count
+                    FROM (
+                        SELECT patent_id, count() AS citation_count
+                        FROM patent_db.patent_citations
+                        WHERE patent_id != ''
+                        GROUP BY patent_id
+                    )
+                    GROUP BY range
+                )
+                GROUP BY range
+                ORDER BY indexOf(['0', '1-5', '6-10', '11-20', '21-50', '51-100', '101-500', '500+'], range)
+                SETTINGS max_threads=8, max_execution_time=60
+            """
+
         count_expr = "count()" if getattr(adapter, 'source_name', '') == 'patents' else f"uniqHLL12({doi_field})"
 
         database = "patent_db" if getattr(adapter, 'source_name', '') == 'patents' else "academic_db"

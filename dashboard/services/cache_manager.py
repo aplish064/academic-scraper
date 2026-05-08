@@ -130,6 +130,14 @@ class CacheManager:
             if stats.get('unique_institutions', 0) == 0:
                 return False
 
+        if source == 'patents':
+            citation_dist = data.get('citations_distribution', {})
+            if citation_dist and sum(
+                count for range_key, count in citation_dist.items()
+                if range_key != '0'
+            ) == 0:
+                return False
+
         return True
 
     def get_source_data(self, source: str) -> Optional[Dict]:

@@ -78,7 +78,6 @@ OPENALEX_TABLE_COLUMNS = [
     "title",
     "rank",
     "journal",
-    "publication_date",
     "citation_count",
     "tag",
     "state",
@@ -91,6 +90,7 @@ OPENALEX_TABLE_COLUMNS = [
     "citation_percentile",
     "primary_topic",
     "is_retracted",
+    "publication_date",
     "import_time",
 ]
 DEDUP_KEY_COLUMNS = [column for column in OPENALEX_TABLE_COLUMNS if column != "import_time"]
@@ -337,10 +337,11 @@ def expand_papers_to_rows(papers: Iterable[Dict[str, Any]]) -> List[Dict[str, An
 
 
 def build_dedup_insert_sql(temp_table: str) -> str:
+    target_columns = ", ".join(OPENALEX_TABLE_COLUMNS)
     select_columns = ", ".join([f"tmp.{column}" for column in OPENALEX_TABLE_COLUMNS])
     join_condition = " AND ".join([f"tmp.{column} = tgt.{column}" for column in DEDUP_KEY_COLUMNS])
     return f"""
-        INSERT INTO {CH_DATABASE}.{CH_TABLE}
+        INSERT INTO {CH_DATABASE}.{CH_TABLE} ({target_columns})
         SELECT {select_columns}
         FROM {CH_DATABASE}.{temp_table} tmp
         LEFT ANTI JOIN {CH_DATABASE}.{CH_TABLE} tgt
@@ -398,7 +399,11 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
             ENGINE = Memory
             """
         )
-        client.insert_df(f"{CH_DATABASE}.{temp_table}", df)
+        client.insert_df(
+            f"{CH_DATABASE}.{temp_table}",
+            df,
+            column_names=OPENALEX_TABLE_COLUMNS,
+        )
         client.command(build_dedup_insert_sql(temp_table))
         client.command(f"DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}")
         return True

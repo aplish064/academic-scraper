@@ -118,7 +118,7 @@ def log_message(message: str, level: str = "INFO"):
             f.write(log_line)
 
 
-def make_request(url: str, params: dict) -> Optional[dict]:
+def make_request(url: str, params: dict) -> Tuple[Optional[dict], Optional[str]]:
     """发送 HTTP 请求，带有重试机制。"""
     for retry_count in range(MAX_RETRIES + 1):
         try:
@@ -139,32 +139,32 @@ def make_request(url: str, params: dict) -> Optional[dict]:
             if response.status_code == 400:
                 # 语义学术搜索常见：offset 到达上限会直接 400，这不是瞬时错误，没必要重试。
                 log_message(f"请求失败: HTTP 400 ({response.text[:120]})", "WARNING")
-                return None
+                return None, "http_400"
 
             if response.status_code != 200:
                 if retry_count >= MAX_RETRIES:
                     log_message(f"请求失败: HTTP {response.status_code}", "ERROR")
-                    return None
+                    return None, f"http_{response.status_code}"
                 wait_time = (2 ** retry_count) * 2
                 time.sleep(wait_time)
                 continue
 
-            return response.json()
+            return response.json(), None
 
         except requests.exceptions.Timeout:
             log_message("请求超时", "WARNING")
             if retry_count >= MAX_RETRIES:
-                return None
+                return None, "timeout"
             time.sleep(5)
             continue
         except Exception as e:
             log_message(f"请求异常: {e}", "ERROR")
             if retry_count >= MAX_RETRIES:
-                return None
+                return None, "exception"
             time.sleep(5)
             continue
 
-    return None
+    return None, "unknown"
 
 
 def should_stop_for_offset(page_index: int, page_size: int) -> bool:
@@ -467,7 +467,7 @@ def validate_journal(journal_name: str) -> Dict[str, Any]:
     }
 
     for retry in range(MAX_RETRIES):
-        data = make_request(f"{BASE_URL}/paper/search", params)
+        data, _ = make_request(f"{BASE_URL}/paper/search", params)
 
         if data is None:
             log_message(f"  venue查询失败 (重试 {retry+1}/{MAX_RETRIES})", "WARNING")
@@ -490,7 +490,7 @@ def validate_journal(journal_name: str) -> Dict[str, Any]:
     }
 
     for retry in range(MAX_RETRIES):
-        data = make_request(f"{BASE_URL}/paper/search", params)
+        data, _ = make_request(f"{BASE_URL}/paper/search", params)
 
         if data is None:
             log_message(f"  query查询失败 (重试 {retry+1}/{MAX_RETRIES})", "WARNING")
@@ -617,9 +617,17 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
             }
 
         # 发送请求
-        data = make_request(f"{BASE_URL}/paper/search", params)
+        data, request_error = make_request(f"{BASE_URL}/paper/search", params)
 
         if data is None:
+            already_fetched = progress_data["journals"][journal_name].get("papers_fetched", 0) > 0
+            hit_offset_boundary = request_error == "http_400" and (
+                current_page > start_page or buffered_papers > 0 or already_fetched
+            )
+            if hit_offset_boundary:
+                log_message(f"  第{current_page}页触发offset边界，结束当前期刊抓取")
+                stop_reason = "offset_boundary_400"
+                break
             log_message(f"  第{current_page}页请求失败", "WARNING")
             terminated_by_error = True
             stop_reason = "request_failed"

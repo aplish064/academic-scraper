@@ -171,6 +171,73 @@
             line-height: 1;
         }
 
+        /* Source Field Info */
+        .source-fields-panel {
+            display: none;
+            margin-bottom: 2rem;
+            padding: 1.25rem 0;
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .source-fields-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .source-fields-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--primary-blue);
+        }
+
+        .source-fields-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.2rem;
+        }
+
+        .source-fields-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .source-field-item {
+            padding: 0.8rem 0;
+            border-top: 1px solid rgba(226, 232, 240, 0.8);
+        }
+
+        .source-field-label {
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 0.25rem;
+        }
+
+        .source-field-name {
+            display: inline-block;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--primary-blue);
+            background: rgba(219, 234, 254, 0.55);
+            border: 1px solid rgba(96, 165, 250, 0.35);
+            border-radius: 6px;
+            padding: 0.15rem 0.45rem;
+            margin-bottom: 0.35rem;
+        }
+
+        .source-field-desc {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            line-height: 1.45;
+        }
+
         /* Charts Grid */
         .charts-grid {
             display: grid;
@@ -408,6 +475,13 @@
             .stats-grid {
                 grid-template-columns: 1fr;
             }
+            .source-fields-header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+            .source-fields-list {
+                grid-template-columns: 1fr;
+            }
             .charts-grid {
                 grid-template-columns: 1fr;
             }
@@ -559,6 +633,17 @@
             </div>
         </div>
 
+        <!-- Source Field Descriptions -->
+        <section class="source-fields-panel" id="sourceFieldsPanel">
+            <div class="source-fields-header">
+                <div>
+                    <div class="source-fields-title" id="sourceFieldsTitle">字段说明</div>
+                    <div class="source-fields-subtitle" id="sourceFieldsSubtitle">当前数据源主要字段</div>
+                </div>
+            </div>
+            <div class="source-fields-list" id="sourceFieldsList"></div>
+        </section>
+
         <!-- Charts Grid -->
         <!-- 论文数量趋势和TOP期刊分布 - 同行显示 -->
         <div class="charts-row">
@@ -708,6 +793,17 @@
                 showsCharts: ['country', 'institution', 'fwci', 'citation', 'papers_trend', 'journal'],
                 showsStats: ['institutions', 'fwci'],
                 metrics: [],
+                fields: [
+                    { label: '唯一标识', name: 'doi', desc: '论文去重与跨源统计的主标识' },
+                    { label: '发表日期', name: 'publication_date', desc: '论文趋势按该日期聚合到月份' },
+                    { label: '作者', name: 'author_id', desc: '作者数量统计使用的作者标识' },
+                    { label: '期刊', name: 'journal', desc: 'TOP 期刊分布与期刊数量统计字段' },
+                    { label: '引用数', name: 'citation_count', desc: '引用次数区间分布字段' },
+                    { label: '机构', name: 'institution_name', desc: '机构数量与机构类型统计的基础字段' },
+                    { label: '国家/地区', name: 'institution_country', desc: 'TOP 国家/地区分布字段' },
+                    { label: '机构类型', name: 'institution_type', desc: '教育、公司等机构类型分布字段' },
+                    { label: 'FWCI', name: 'fwci', desc: '平均 FWCI 与 FWCI 分布字段' }
+                ],
                 labels: {
                     papers: '总论文数',
                     authors: '作者总数',
@@ -727,6 +823,16 @@
                 showsCharts: ['papers_trend', 'journal'],
                 showsStats: [],
                 metrics: [],
+                fields: [
+                    { label: '唯一标识', name: 'doi', desc: '论文去重与总量估算字段' },
+                    { label: '发表年份', name: 'year', desc: '论文趋势按年份聚合' },
+                    { label: '作者', name: 'author_name', desc: '作者总数统计字段' },
+                    { label: '期刊/会议', name: 'venue', desc: 'TOP 期刊/会议分布字段' },
+                    { label: '机构', name: 'institution', desc: '作者机构信息字段' },
+                    { label: 'CCF 等级', name: 'ccf_class', desc: 'CCF 分类分布字段' },
+                    { label: '发表类型', name: 'publtype', desc: '期刊、会议等发表类型字段' },
+                    { label: '场地类型', name: 'venue_type', desc: '会议/期刊场地类型字段' }
+                ],
                 labels: {
                     papers: '总论文数',
                     authors: '作者总数',
@@ -744,6 +850,17 @@
                 showsCharts: ['citation', 'papers_trend', 'journal'],
                 showsStats: [],
                 metrics: [],
+                fields: [
+                    { label: '唯一标识', name: 'doi', desc: '论文去重与跨源统计的主标识' },
+                    { label: '发表日期', name: 'publication_date', desc: '论文趋势按该日期聚合到月份' },
+                    { label: '作者', name: 'author_id', desc: '作者数量统计使用的作者标识' },
+                    { label: '期刊', name: 'journal', desc: 'TOP 期刊分布字段' },
+                    { label: '发表场所', name: 'venue', desc: '期刊或会议场所字段' },
+                    { label: '引用数', name: 'citation_count', desc: '引用次数区间分布字段' },
+                    { label: '机构', name: 'institution_name', desc: '机构名称字段' },
+                    { label: '国家/地区', name: 'institution_country', desc: '机构国家/地区字段' },
+                    { label: '标签', name: 'tag', desc: '作者或记录标签字段' }
+                ],
                 labels: {
                     papers: '总论文数',
                     authors: '作者总数',
@@ -763,6 +880,15 @@
                 showsCharts: ['category', 'timeline'],
                 showsStats: ['unique_categories', 'time_range'],
                 metrics: [],
+                fields: [
+                    { label: '论文标识', name: 'id', desc: 'arXiv 记录标识' },
+                    { label: '发布日期', name: 'published', desc: '论文发表趋势与时间范围统计字段' },
+                    { label: '作者', name: 'author', desc: '作者总数统计字段' },
+                    { label: '主分类', name: 'primary_category', desc: '学科分类数量与分类分布字段' },
+                    { label: '期刊引用', name: 'journal_ref', desc: '期刊引用或发表信息字段' },
+                    { label: '标题', name: 'title', desc: '论文标题字段' },
+                    { label: '摘要', name: 'abstract', desc: '论文摘要文本字段' }
+                ],
                 labels: {
                     papers: '总论文数',
                     authors: '作者总数',
@@ -779,6 +905,16 @@
                 showsCharts: ['citation', 'papers_trend', 'journal', 'category'],
                 showsStats: ['high_citations'],
                 metrics: [],
+                fields: [
+                    { label: '专利标识', name: 'patent_id', desc: '专利去重、引用与关联表连接字段' },
+                    { label: '授权日期', name: 'grant_date', desc: '专利授权趋势按该日期聚合' },
+                    { label: '发明人', name: 'inventors', desc: '发明人总数统计字段' },
+                    { label: '权利人', name: 'assignees', desc: 'TOP 权利人分布与权利人数量统计字段' },
+                    { label: '引用专利数', name: 'patent_citations.patent_id', desc: '按引用表统计每件专利引用的其他专利数量' },
+                    { label: '国家/地区', name: 'country', desc: '专利国家/地区字段' },
+                    { label: 'CPC 分类', name: 'cpc_codes', desc: 'CPC 分类分布字段' },
+                    { label: '标题', name: 'title', desc: '专利标题字段' }
+                ],
                 itemLabel: '专利',
                 authorLabel: '发明人',
                 venueLabel: '权利人',
@@ -792,8 +928,8 @@
                     papersTrendSubtitle: '按授权日期统计的专利数量',
                     journalChartTitle: 'TOP 50 权利人分布',
                     journalChartSubtitle: '专利数量最多的权利人',
-                    citationChartTitle: '被引次数分布',
-                    citationChartSubtitle: '专利被引数量区间分布',
+                    citationChartTitle: '引用专利数量分布',
+                    citationChartSubtitle: '每件专利引用的其他专利数量区间分布',
                     categoryChartTitle: 'CPC 分类分布',
                     categoryChartSubtitle: '按 CPC 主分类统计专利数量',
                     dateField: 'grant_date'
@@ -804,6 +940,7 @@
                 showsCharts: ['papers_trend', 'journal', 'citation'],
                 showsStats: [],
                 metrics: [],
+                fields: [],
                 labels: {
                     papers: '总论文数',
                     authors: '作者总数',
@@ -934,6 +1071,39 @@
             if (subtitleElement && subtitle) subtitleElement.textContent = subtitle;
         }
 
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function updateSourceFieldInfo(source) {
+            const panel = document.getElementById('sourceFieldsPanel');
+            const title = document.getElementById('sourceFieldsTitle');
+            const subtitle = document.getElementById('sourceFieldsSubtitle');
+            const list = document.getElementById('sourceFieldsList');
+            const config = DATA_SOURCE_CONFIG[source] || DATA_SOURCE_CONFIG['all'];
+
+            if (!panel || !list || source === 'all' || !config.fields || config.fields.length === 0) {
+                if (panel) panel.style.display = 'none';
+                return;
+            }
+
+            title.textContent = `${config.name} 字段说明`;
+            subtitle.textContent = '当前数据源在看板统计、图表和筛选中使用的主要字段';
+            list.innerHTML = config.fields.map(field => `
+                <div class="source-field-item">
+                    <div class="source-field-label">${escapeHtml(field.label)}</div>
+                    <div class="source-field-name">${escapeHtml(field.name)}</div>
+                    <div class="source-field-desc">${escapeHtml(field.desc)}</div>
+                </div>
+            `).join('');
+            panel.style.display = 'block';
+        }
+
         // 统一的UI更新函数 - 配置驱动
         function updateUIForDataSource(source) {
             const config = DATA_SOURCE_CONFIG[source] || DATA_SOURCE_CONFIG['all'];
@@ -982,6 +1152,7 @@
 
             // 显示/隐藏统计卡片
             updateStatsVisibility(config.showsStats);
+            updateSourceFieldInfo(source);
 
             console.log(`✅ UI已更新为${config.name}模式`);
         }

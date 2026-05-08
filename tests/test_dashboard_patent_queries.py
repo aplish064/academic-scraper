@@ -29,9 +29,21 @@ class DashboardPatentQueryTests(unittest.TestCase):
         citation_sql = builder.build_citation_distribution_query(adapter)
 
         self.assertIn("count() as count", date_sql)
-        self.assertIn("count() as count", citation_sql)
         self.assertNotIn("count(DISTINCT patent_id)", date_sql)
         self.assertNotIn("count(DISTINCT patent_id)", citation_sql)
+        self.assertIn("count() AS citation_count", citation_sql)
+        self.assertIn("count() AS count", citation_sql)
+
+    def test_patent_citation_distribution_uses_citation_table_counts(self):
+        adapter = PatentsAdapter()
+        builder = QueryBuilder(lambda: None)
+
+        citation_sql = builder.build_citation_distribution_query(adapter)
+
+        self.assertIn("FROM patent_db.patent_citations", citation_sql)
+        self.assertIn("GROUP BY patent_id", citation_sql)
+        self.assertIn("FROM patent_db.patents", citation_sql)
+        self.assertNotIn("num_cited_by", citation_sql)
 
     def test_patent_cpc_distribution_uses_row_count(self):
         aggregator_source = (DASHBOARD_DIR / "services" / "data_aggregator.py").read_text(encoding="utf-8")

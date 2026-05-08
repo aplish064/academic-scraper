@@ -22,6 +22,22 @@ VALID_PATENT_DATA = {
         "unique_authors": 4164926,
         "unique_journals": 562415,
     },
+    "citations_distribution": {
+        "0": 761260,
+        "1-5": 3589411,
+    },
+}
+
+INVALID_PATENT_CITATION_DATA = {
+    "source": "patents",
+    "statistics": {
+        "total_papers": 9361444,
+        "unique_authors": 4164926,
+        "unique_journals": 562415,
+    },
+    "citations_distribution": {
+        "0": 9361444,
+    },
 }
 
 INVALID_OPENALEX_DATA = {
@@ -157,6 +173,11 @@ class DashboardCacheManagerTests(unittest.TestCase):
         self.assertFalse(saved)
         self.assertNotIn(manager.get_cache_key("openalex"), redis.values)
         self.assertNotIn(manager.get_stale_cache_key("openalex"), redis.values)
+
+    def test_patent_cache_rejects_all_zero_citation_distribution(self):
+        manager = CacheManager(FakeRedis())
+
+        self.assertFalse(manager.validate_data_integrity(INVALID_PATENT_CITATION_DATA, "patents"))
 
     def test_incomplete_openalex_statistics_are_not_valid_cache(self):
         manager = CacheManager(FakeRedis())

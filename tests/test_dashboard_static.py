@@ -37,6 +37,8 @@ class DashboardStaticTests(unittest.TestCase):
         self.assertIn("authors: '发明人总数'", html)
         self.assertIn("journalChartTitle: 'TOP 50 权利人分布'", html)
         self.assertIn("papersTrendTitle: '专利授权趋势'", html)
+        self.assertIn("citationChartTitle: '引用专利数量分布'", html)
+        self.assertIn("citationChartSubtitle: '每件专利引用的其他专利数量区间分布'", html)
         self.assertIn("setStatCardLabel('totalPapers'", html)
         self.assertIn("setChartHeader('journalDistCard'", html)
 
@@ -53,6 +55,18 @@ class DashboardStaticTests(unittest.TestCase):
         self.assertIn("cache_manager.get_source_data('arxiv')", server)
         self.assertIn("cache_manager.get_stale_source_data('arxiv')", server)
         self.assertIn("cache_manager.set_source_data('arxiv'", server)
+
+    def test_single_sources_render_field_descriptions(self):
+        html = INDEX_HTML.read_text(encoding="utf-8")
+
+        self.assertIn('id="sourceFieldsPanel"', html)
+        self.assertIn('id="sourceFieldsList"', html)
+        self.assertIn("function updateSourceFieldInfo(source)", html)
+        self.assertIn("source === 'all'", html)
+        self.assertIn("fields: [", html)
+        self.assertIn("name: 'doi'", html)
+        self.assertIn("name: 'patent_id'", html)
+        self.assertIn("name: 'primary_category'", html)
 
 
 if __name__ == "__main__":
