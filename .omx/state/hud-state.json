@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-05-08T08:26:12.415Z",
-  "turn_count": 84,
-  "last_progress_at": "2026-05-08T08:26:12.415Z",
-  "last_agent_output": "已重新启动三个后台数据获取任务，当前都在运行。\n\n当前进程：\n\n- `arxiv`: PID `43622`\n  - 命令：`/home/hkustgz/Us/academic-scraper/ven"
+  "last_turn_at": "2026-05-09T05:43:48.121Z",
+  "turn_count": 165,
+  "last_progress_at": "2026-05-09T05:43:48.121Z",
+  "last_agent_output": "当前进度是：上一轮已经失败退出过一次，我刚刚用同一个进度文件重新续跑了。\n\n失败原因是 CNIPA 接口在 `2026-05-08 / pubtype=1 / bucket=17` 连续 5 次返回："
 }
