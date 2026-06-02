@@ -14,10 +14,10 @@ pip install httpx tqdm
 
 ```bash
 # OpenAlex 获取器（异步高性能）
-python3 src/openalex_fetcher.py
+python3 -m src.papers.openalex_fetcher
 
 # ArXiv 获取器
-python3 src/arxiv_fetcher.py
+python3 -m src.papers.arxiv_fetcher
 ```
 
 ### 数据维护工具
@@ -51,13 +51,15 @@ output/
     └── ...
 
 log/
-├── openalex_fetch_progress.json  # 进度文件
-└── openalex_fetch_fast.log        # 日志文件
+└── papers/
+    └── openalex/
+        ├── openalex_fetch_progress.json  # 进度文件
+        └── openalex_fetch_fast.log        # 日志文件
 ```
 
 ## 配置
 
-编辑 `src/openalex_fetcher.py`：
+编辑 `src/papers/openalex_fetcher.py`：
 
 ```python
 START_DATE = "20260410"              # 开始日期
@@ -101,7 +103,7 @@ bash src/run_streaming.sh
 
 ### 断点恢复
 
-获取器会在中断后自动从 `log/checkpoint_streaming.json` 恢复。
+获取器会在中断后自动从 `log/papers/dblp/checkpoint_streaming.json` 恢复。
 
 ### 性能
 

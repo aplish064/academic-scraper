@@ -19,26 +19,38 @@ import pandas as pd
 from typing import Dict, Any, Optional
 from pathlib import Path
 from lxml import etree
+import shutil
 
-from streaming import (
-    ThreadSafeAuthorCache,
-    ThreadSafeCheckpointManager,
-    QueueMonitor,
-    StreamingAuthorMatcher,
-    XMLStreamingParser
-)
-from streaming.ccf_mapping import get_ccf_classification
+try:
+    from src.streaming import (
+        ThreadSafeAuthorCache,
+        ThreadSafeCheckpointManager,
+        QueueMonitor,
+        StreamingAuthorMatcher,
+        XMLStreamingParser,
+    )
+    from src.streaming.ccf_mapping import get_ccf_classification
+except (ImportError, ModuleNotFoundError):
+    from streaming import (
+        ThreadSafeAuthorCache,
+        ThreadSafeCheckpointManager,
+        QueueMonitor,
+        StreamingAuthorMatcher,
+        XMLStreamingParser,
+    )
+    from streaming.ccf_mapping import get_ccf_classification
 
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 
 # Default file paths
 XML_PATH = str(PROJECT_ROOT / "data" / "dblp.xml")
-CHECKPOINT_PATH = str(PROJECT_ROOT / "log" / "checkpoint_streaming.json")
+CHECKPOINT_PATH = str(PROJECT_ROOT / "log" / "papers" / "dblp" / "checkpoint_streaming.json")
+LEGACY_CHECKPOINT_PATH = str(PROJECT_ROOT / "log" / "checkpoint_streaming.json")
 CSRANKINGS_PATH = str(PROJECT_ROOT / "data" / "csrankings.csv")
 
 # Concurrency settings
@@ -515,9 +527,11 @@ class DBLPStreamingFetcher:
 
 def main():
     """Main entry point for DBLP streaming fetcher."""
+    default_checkpoint_path = prepare_default_checkpoint_path()
+
     fetcher = DBLPStreamingFetcher(
         xml_path=XML_PATH,
-        checkpoint_path=CHECKPOINT_PATH,
+        checkpoint_path=default_checkpoint_path,
         csrankings_path=CSRANKINGS_PATH,
         db_client=None,  # Will create default client
         queue_size=QUEUE_SIZE,
@@ -526,6 +540,21 @@ def main():
 
     stats = fetcher.run()
     print(f"\n✅ Final statistics: {stats}")
+
+
+def prepare_default_checkpoint_path() -> str:
+    """Return the default checkpoint path and backfill it from legacy location when needed."""
+    target = CHECKPOINT_PATH
+    target_path = Path(target)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not target_path.exists() and Path(LEGACY_CHECKPOINT_PATH).exists():
+        try:
+            shutil.copy2(LEGACY_CHECKPOINT_PATH, target)
+        except Exception:
+            pass
+
+    return target
 
 
 if __name__ == '__main__':

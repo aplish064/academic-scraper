@@ -10,9 +10,9 @@ Academic Scraper is a high-performance academic paper data collection system tha
 
 ### Running the Main Fetcher
 ```bash
-python3 src/openalex_fetcher.py
+python3 -m src.papers.openalex_fetcher
 ```
-The script automatically resumes from the last checkpoint using `log/openalex_fetch_progress.json`.
+The script automatically resumes from the last checkpoint using `log/papers/openalex/openalex_fetch_progress.json`.
 
 ### Data Maintenance Tools
 ```bash
@@ -63,7 +63,7 @@ cd /home/hkustgz/Us/academic-scraper/dashboard
 
 ### Core Components
 
-**openalex_fetcher.py** - Main async fetcher
+**src/papers/openalex_fetcher.py** - Main async fetcher
 - Uses `asyncio` + `httpx` with HTTP/2 for concurrent requests
 - Processes dates in reverse order (newest to oldest)
 - Implements rate limit detection and automatic stopping
@@ -85,7 +85,7 @@ cd /home/hkustgz/Us/academic-scraper/dashboard
 - Format: `author, uid, doi, title, rank, journal, citation_count, tag, state`
 
 **Progress Management**:
-- `log/openalex_fetch_progress.json` tracks completed dates
+- `log/papers/openalex/openalex_fetch_progress.json` tracks completed dates
 - Dates with zero papers are NOT saved (will retry on next run)
 - API rate limit errors trigger immediate shutdown with progress saved
 - Supports graceful interruption and resumption
@@ -128,7 +128,7 @@ Example: When user asked to check for duplicates and merge CSVs, those tools wer
 
 ### Configuration
 
-Key constants in `openalex_fetcher.py`:
+Key constants in `src/papers/openalex_fetcher.py`:
 - `START_DATE`: Where to begin fetching (format: YYYYMMDD)
 - `END_YEAR`: How far back to fetch
 - `MAX_CONCURRENT_REQUESTS`: Number of parallel requests (default: 20)
@@ -142,7 +142,7 @@ Key constants in `openalex_fetcher.py`:
   - Multiple days append to same file
   - Format: UTF-8-BOM encoded CSV with all fields quoted
 
-- **Progress file**: `log/openalex_fetch_progress.json`
+- **Progress file**: `log/papers/openalex/openalex_fetch_progress.json`
   ```json
   {
     "current_date": "20260201",
@@ -151,7 +151,7 @@ Key constants in `openalex_fetcher.py`:
   }
   ```
 
-- **Log file**: `log/openalex_fetch_fast.log`
+- **Log file**: `log/papers/openalex/openalex_fetch_fast.log`
   - Session start/end timestamps
   - Per-date fetch results (paper count, row count, file path)
 

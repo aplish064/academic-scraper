@@ -13,9 +13,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import requests
 
 try:
-    from src import cn_patent_fetcher
+    from . import cnipa_importer as cn_patent_fetcher
 except ImportError:  # pragma: no cover - supports direct script execution from src/
-    import cn_patent_fetcher  # type: ignore
+    import cnipa_importer as cn_patent_fetcher  # type: ignore
 
 
 SOURCE_NAME = "cnipa_announcement"
@@ -38,16 +38,19 @@ PUBTYPE_NAMES = {
 GRANT_PUBTYPES = {3, 4, 6, 7, 9, 10}
 INITIAL_BUCKETS = list("0123456789")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-LOG_DIR = os.path.join(PROJECT_ROOT, "log")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+LOG_DIR = os.path.join(PROJECT_ROOT, "log", "patents", "cnipa_announcement")
+LOG_DIR_LEGACY = os.path.join(PROJECT_ROOT, "log")
 DEFAULT_BATCH_SIZE = cn_patent_fetcher.DEFAULT_BATCH_SIZE
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_REQUEST_DELAY = 1.0
 DEFAULT_SPLIT_THRESHOLD = 9000
 DEFAULT_MAX_PREFIX_LENGTH = 8
 DEFAULT_MAX_RESULTS_PER_BUCKET = 10000
-DEFAULT_PROGRESS_FILE = os.path.join(LOG_DIR, "cnipa_announcement_progress.json")
-DEFAULT_LOG_FILE = os.path.join(LOG_DIR, "cnipa_announcement_fetcher.log")
+DEFAULT_PROGRESS_FILE = os.path.join(PROJECT_ROOT, "log", "patents", "cnipa_announcement", "cnipa_announcement_progress.json")
+DEFAULT_LOG_FILE = os.path.join(PROJECT_ROOT, "log", "patents", "cnipa_announcement", "cnipa_announcement_fetcher.log")
+LEGACY_PROGRESS_FILE = os.path.join(LOG_DIR_LEGACY, "cnipa_announcement_progress.json")
+LEGACY_LOG_FILE = os.path.join(LOG_DIR_LEGACY, "cnipa_announcement_fetcher.log")
 DEFAULT_MAX_RETRIES = 5
 HEADERS = {
     "User-Agent": (
@@ -283,7 +286,11 @@ def to_jsonable(value: Any) -> Any:
 
 
 def load_progress(progress_file: str = "") -> Dict[str, Any]:
-    if not progress_file or not os.path.exists(progress_file):
+    if not progress_file:
+        progress_file = DEFAULT_PROGRESS_FILE
+    if not os.path.exists(progress_file) and progress_file == DEFAULT_PROGRESS_FILE and os.path.exists(LEGACY_PROGRESS_FILE):
+        progress_file = LEGACY_PROGRESS_FILE
+    if not os.path.exists(progress_file):
         return {}
     try:
         with open(progress_file, "r", encoding="utf-8") as handle:

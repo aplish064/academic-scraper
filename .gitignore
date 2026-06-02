@@ -34,6 +34,7 @@ Thumbs.db
 data/
 temp/
 docs/
+output/
 
 # Exceptions: important temp scripts to track
 !temp/init_patent_table.py

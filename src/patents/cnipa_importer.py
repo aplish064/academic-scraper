@@ -21,7 +21,7 @@ import clickhouse_connect
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
 CH_HOST = "localhost"
 CH_PORT = 8123
@@ -47,9 +47,12 @@ CH_TABLE_COLUMNS = [
 SOURCE_NAME = "cnipa"
 DEFAULT_COUNTRY = "CN"
 
-LOG_DIR = os.path.join(PROJECT_ROOT, "log")
+LOG_DIR = os.path.join(PROJECT_ROOT, "log", "patents", "cnipa")
+LEGACY_LOG_DIR = os.path.join(PROJECT_ROOT, "log")
 LOG_FILE = os.path.join(LOG_DIR, "cn_patent_fetcher.log")
 PROGRESS_FILE = os.path.join(LOG_DIR, "cn_patent_fetch_progress.json")
+LEGACY_LOG_FILE = os.path.join(LEGACY_LOG_DIR, "cn_patent_fetcher.log")
+LEGACY_PROGRESS_FILE = os.path.join(LEGACY_LOG_DIR, "cn_patent_fetch_progress.json")
 
 PATENT_COLUMNS = [
     "patent_id",
@@ -978,6 +981,8 @@ def get_empty_progress() -> Dict[str, Any]:
 
 def load_progress(progress_file: Optional[str] = None) -> Dict[str, Any]:
     target = progress_file or PROGRESS_FILE
+    if target == PROGRESS_FILE and not os.path.exists(target) and os.path.exists(LEGACY_PROGRESS_FILE):
+        target = LEGACY_PROGRESS_FILE
     if not os.path.exists(target):
         return get_empty_progress()
 

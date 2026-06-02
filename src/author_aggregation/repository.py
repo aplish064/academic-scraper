@@ -162,6 +162,14 @@ class AuthorAggregationRepository:
     def __init__(self, client):
         self.client = client
 
+    @staticmethod
+    def _normalize_clickhouse_watermark(value: datetime) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime) and value <= EPOCH_WATERMARK:
+            return None
+        return value
+
     def create_schema(self) -> None:
         for sql in schema.all_schema_sql():
             self.client.command(sql)
@@ -275,8 +283,20 @@ class AuthorAggregationRepository:
         result_rows = list(getattr(query_result, "result_rows", []) or [])
         if not result_rows:
             return None
-        value = result_rows[0][0]
-        return value if value else None
+        return self._normalize_clickhouse_watermark(result_rows[0][0])
+
+    def get_max_watermark(self, source: str) -> Optional[datetime]:
+        table, watermark_field = SOURCE_CONFIG[source]
+        sql = (
+            f"SELECT max({watermark_field}) "
+            f"FROM {table} "
+            f"WHERE {watermark_field} > toDateTime('{format_datetime(EPOCH_WATERMARK)}')"
+        )
+        query_result = self.client.query(sql)
+        result_rows = list(getattr(query_result, "result_rows", []) or [])
+        if not result_rows:
+            return None
+        return self._normalize_clickhouse_watermark(result_rows[0][0])
 
     def get_next_watermark(self, source: str, watermark: datetime) -> Optional[datetime]:
         table, watermark_field = SOURCE_CONFIG[source]
@@ -289,8 +309,7 @@ class AuthorAggregationRepository:
         result_rows = list(getattr(query_result, "result_rows", []) or [])
         if not result_rows:
             return None
-        value = result_rows[0][0]
-        return value if value else None
+        return self._normalize_clickhouse_watermark(result_rows[0][0])
 
     def upsert_ingest_state(
         self,

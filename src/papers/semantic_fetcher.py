@@ -22,7 +22,7 @@ Configuration:
     - PAPERS_PER_REQUEST: 每次请求的论文数量
 
 Progress Tracking:
-    进度保存在 log/journal_progress.json
+    进度保存在 log/papers/semantic/journal_progress.json
     - journals: 每个期刊的状态（pending/valid/in_progress/completed/failed）
     - 支持中断后继续执行
     - 已完成的期刊会被跳过
@@ -38,15 +38,16 @@ import requests
 import json
 import time
 import os
+import math
 from datetime import datetime
 from pathlib import Path
 import clickhouse_connect
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from tqdm import tqdm
 
 # 获取脚本所在目录的绝对路径
-SCRIPT_DIR = Path(__file__).parent.parent.absolute()
+SCRIPT_DIR = Path(__file__).parent.parent.parent.absolute()
 
 # ============ 配置参数 ============
 API_KEY = "7Tts2u4jXLaebjvFPICkE7kpTJQvUaYG4byRSpBp"
@@ -64,34 +65,106 @@ CH_PASSWORD = ''
 CSV_PATH = SCRIPT_DIR / "data/XR2026-UTF8.csv"
 CSV_ENCODING = "utf-8-sig"
 
-# 请求配置
-REQUEST_INTERVAL = 1.1
-REQUEST_TIMEOUT = 30
-MAX_RETRIES = 3
+# 请求配置（可被环境变量覆盖）
+DEFAULT_REQUEST_INTERVAL = 1.1
+DEFAULT_REQUEST_TIMEOUT = 30
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RATE_LIMIT_WAIT_SECONDS = 60
+DEFAULT_INSERT_FLUSH_ROWS = 5000
+
+ENV_REQUEST_INTERVAL = "SEMANTIC_REQUEST_INTERVAL"
+ENV_REQUEST_TIMEOUT = "SEMANTIC_REQUEST_TIMEOUT"
+ENV_MAX_RETRIES = "SEMANTIC_MAX_RETRIES"
+ENV_RATE_LIMIT_WAIT_SECONDS = "SEMANTIC_RATE_LIMIT_WAIT_SECONDS"
+ENV_INSERT_FLUSH_ROWS = "SEMANTIC_INSERT_FLUSH_ROWS"
 
 # 查询配置
 PAPERS_PER_REQUEST = 100
 MAX_PAGES_PER_JOURNAL = None  # None = 无限制
 MAX_OFFSET_EXCLUSIVE = 1000   # 语义学术搜索 offset 上限（offset >= 1000 会 400）
 PROGRESS_SAVE_EVERY_PAGES = 5 # 每处理 N 页落盘一次，减少进度文件 IO
-INSERT_FLUSH_ROWS = 5000      # 累积到 N 行后批量写入 ClickHouse
+INSERT_FLUSH_ROWS = DEFAULT_INSERT_FLUSH_ROWS      # 累积到 N 行后批量写入 ClickHouse
 
 # 字段列表
 FIELDS = "paperId,title,authors,year,venue,journal,publicationDate,citationCount,externalIds,url,abstract"
 
 # 输出配置
-LOG_DIR = SCRIPT_DIR / "log"
+LOG_DIR = SCRIPT_DIR / "log" / "papers" / "semantic"
+LEGACY_LOG_DIR = SCRIPT_DIR / "log"
 PROGRESS_FILE = LOG_DIR / "journal_progress.json"
 LOG_FILE = LOG_DIR / "journal_fetch.log"
 ERROR_LOG_FILE = LOG_DIR / "journal_errors.log"
+LEGACY_PROGRESS_FILE = LEGACY_LOG_DIR / "journal_progress.json"
 
 # ============ 全局变量 ============
 headers = {
     "x-api-key": API_KEY,
     "Content-Type": "application/json"
 }
-session = requests.Session()
-session.headers.update(headers)
+
+
+def _parse_int(value: Any, *, default: int, minimum: int = 1) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
+def _parse_float(value: Any, *, default: float, minimum: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
+def _load_runtime_config(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    env_vars = env if env is not None else os.environ
+    return {
+        "request_interval": _parse_float(env_vars.get(ENV_REQUEST_INTERVAL), default=DEFAULT_REQUEST_INTERVAL, minimum=0.0),
+        "request_timeout": _parse_float(env_vars.get(ENV_REQUEST_TIMEOUT), default=DEFAULT_REQUEST_TIMEOUT, minimum=0.1),
+        "max_retries": _parse_int(env_vars.get(ENV_MAX_RETRIES), default=DEFAULT_MAX_RETRIES, minimum=0),
+        "rate_limit_wait_seconds": _parse_float(
+            env_vars.get(ENV_RATE_LIMIT_WAIT_SECONDS),
+            default=DEFAULT_RATE_LIMIT_WAIT_SECONDS,
+            minimum=0.0,
+        ),
+        "insert_flush_rows": _parse_int(env_vars.get(ENV_INSERT_FLUSH_ROWS), default=DEFAULT_INSERT_FLUSH_ROWS, minimum=1),
+    }
+
+
+_RUNTIME_CONFIG = _load_runtime_config()
+REQUEST_INTERVAL = _RUNTIME_CONFIG["request_interval"]
+REQUEST_TIMEOUT = _RUNTIME_CONFIG["request_timeout"]
+MAX_RETRIES = _RUNTIME_CONFIG["max_retries"]
+RATE_LIMIT_WAIT_SECONDS = _RUNTIME_CONFIG["rate_limit_wait_seconds"]
+INSERT_FLUSH_ROWS = _RUNTIME_CONFIG["insert_flush_rows"]
+
+
+def _new_session() -> requests.Session:
+    new = requests.Session()
+    new.headers.update(headers)
+    return new
+
+
+def _reset_session() -> requests.Session:
+    global session
+    session = _new_session()
+    return session
+
+
+session = _new_session()
 
 
 # ============ 工具函数 ============
@@ -99,6 +172,13 @@ session.headers.update(headers)
 def setup_directories():
     """创建必要的目录"""
     PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _format_exception(exc: BaseException) -> str:
+    message = str(exc).strip()
+    if not message:
+        message = "<empty>"
+    return f"class={exc.__class__.__name__} message={message} repr={repr(exc)}"
 
 
 def log_message(message: str, level: str = "INFO"):
@@ -125,14 +205,17 @@ def make_request(url: str, params: dict) -> Tuple[Optional[dict], Optional[str]]
             response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
 
             if response.status_code == 429:
-                wait_seconds = 60
+                wait_seconds = RATE_LIMIT_WAIT_SECONDS
                 retry_after = response.headers.get("Retry-After")
                 if retry_after:
                     try:
                         wait_seconds = max(1, int(retry_after))
                     except (TypeError, ValueError):
-                        wait_seconds = 60
+                        wait_seconds = RATE_LIMIT_WAIT_SECONDS
                 log_message(f"速率限制，暂停{wait_seconds}秒", "WARNING")
+                if retry_count >= MAX_RETRIES:
+                    log_message("速率限制重试次数已用尽，放弃本次请求", "ERROR")
+                    return None, "http_429_exhausted"
                 time.sleep(wait_seconds)
                 continue
 
@@ -140,6 +223,15 @@ def make_request(url: str, params: dict) -> Tuple[Optional[dict], Optional[str]]
                 # 语义学术搜索常见：offset 到达上限会直接 400，这不是瞬时错误，没必要重试。
                 log_message(f"请求失败: HTTP 400 ({response.text[:120]})", "WARNING")
                 return None, "http_400"
+
+            if 500 <= response.status_code < 600:
+                if retry_count >= MAX_RETRIES:
+                    log_message(f"请求失败: HTTP {response.status_code}", "ERROR")
+                    return None, "http_5xx_exhausted"
+                wait_time = (2 ** retry_count) * 2
+                log_message(f"服务器错误: HTTP {response.status_code}，重试中", "WARNING")
+                time.sleep(wait_time)
+                continue
 
             if response.status_code != 200:
                 if retry_count >= MAX_RETRIES:
@@ -151,14 +243,23 @@ def make_request(url: str, params: dict) -> Tuple[Optional[dict], Optional[str]]
 
             return response.json(), None
 
-        except requests.exceptions.Timeout:
-            log_message("请求超时", "WARNING")
+        except requests.exceptions.Timeout as e:
+            _reset_session()
+            log_message(f"请求超时: {_format_exception(e)}", "WARNING")
             if retry_count >= MAX_RETRIES:
                 return None, "timeout"
             time.sleep(5)
             continue
+        except requests.exceptions.RequestException as e:
+            _reset_session()
+            log_message(f"请求异常: {_format_exception(e)}", "WARNING")
+            if retry_count >= MAX_RETRIES:
+                return None, "network_error"
+            time.sleep(5)
+            continue
         except Exception as e:
-            log_message(f"请求异常: {e}", "ERROR")
+            _reset_session()
+            log_message(f"请求异常: {_format_exception(e)}", "ERROR")
             if retry_count >= MAX_RETRIES:
                 return None, "exception"
             time.sleep(5)
@@ -334,9 +435,12 @@ def paper_to_rows(paper: dict) -> List[Dict[str, Any]]:
 
 def load_progress() -> dict:
     """加载进度文件"""
-    if PROGRESS_FILE.exists():
+    progress_file = PROGRESS_FILE
+    if not progress_file.exists() and LEGACY_PROGRESS_FILE.exists():
+        progress_file = LEGACY_PROGRESS_FILE
+    if progress_file.exists():
         try:
-            with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+            with open(progress_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
             log_message("进度文件损坏，将创建新文件", "WARNING")
@@ -357,6 +461,7 @@ def get_empty_progress() -> dict:
 
 def save_progress(progress_data: dict):
     """保存进度文件"""
+    PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
     progress_data['last_update'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
@@ -384,6 +489,24 @@ def update_journal_progress(progress_data: dict, journal_name: str,
         progress_data["journals"][journal_name][key] = value
 
     return progress_data
+
+
+RETRYABLE_REQUEST_ERRORS = {"timeout", "network_error", "http_429_exhausted", "http_5xx_exhausted"}
+
+
+def is_retryable_request_error(last_error: Optional[str]) -> bool:
+    return (last_error in RETRYABLE_REQUEST_ERRORS)
+
+
+def is_legacy_retryable_failed_journal(existing: Dict[str, Any]) -> bool:
+    """旧版本中失败但未触发可重试错误且未采集任何数据的期刊，允许重试。"""
+    return (
+        existing.get("status") == "failed" and
+        not is_retryable_request_error(existing.get("last_error")) and
+        existing.get("total_pages", 0) == 0 and
+        existing.get("current_page", 0) == 0 and
+        existing.get("papers_fetched", 0) == 0
+    )
 
 # ============ CSV 加载函数 ============
 
@@ -529,13 +652,12 @@ def batch_validate_journals(journal_list: List[Dict[str, Any]],
             # 检查是否已验证
             if journal_name in progress_data["journals"]:
                 existing = progress_data["journals"][journal_name]
-                if existing["status"] in ["valid", "completed", "in_progress"]:
-                    validated[journal_name] = {
-                        "query_type": existing.get("query_type", "query"),
-                        "status": existing["status"]
-                    }
-                    pbar.update(1)
-                    continue
+                validated[journal_name] = {
+                    "query_type": existing.get("query_type", "query"),
+                    "status": existing["status"]
+                }
+                pbar.update(1)
+                continue
 
             # 跳过验证，直接标记为有效，使用 query 方式
             validated[journal_name] = {
@@ -628,9 +750,10 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
                 log_message(f"  第{current_page}页触发offset边界，结束当前期刊抓取")
                 stop_reason = "offset_boundary_400"
                 break
-            log_message(f"  第{current_page}页请求失败", "WARNING")
+            request_error_code = request_error or "request_failed"
+            log_message(f"  第{current_page}页请求失败: {request_error_code}", "WARNING")
             terminated_by_error = True
-            stop_reason = "request_failed"
+            stop_reason = request_error_code
             break
 
         papers = data.get("data", [])
@@ -687,7 +810,9 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
                 progress_data, journal_name,
                 status="in_progress",
                 current_page=current_page + 1,
-                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + flushed_papers
+                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + flushed_papers,
+                last_error=None,
+                last_error_at=None,
             )
             pages_since_progress_save += 1
             if pages_since_progress_save >= PROGRESS_SAVE_EVERY_PAGES:
@@ -714,16 +839,47 @@ def fetch_papers_by_journal(journal_name: str, query_type: str,
                 progress_data, journal_name,
                 status="in_progress",
                 current_page=current_page,
-                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + flushed_papers
+                papers_fetched=progress_data["journals"][journal_name]["papers_fetched"] + flushed_papers,
+                last_error=None,
+                last_error_at=None,
             )
 
     # 标记状态
-    final_status = "failed" if terminated_by_error else "completed"
-    update_journal_progress(
-        progress_data, journal_name,
-        status=final_status,
-        total_pages=current_page
-    )
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if terminated_by_error:
+        papers_fetched = (
+            progress_data["journals"][journal_name].get("papers_fetched", 0)
+            + total_papers + buffered_papers
+        )
+        if is_retryable_request_error(stop_reason):
+            resumed_status = "valid" if papers_fetched == 0 else "in_progress"
+            final_status = resumed_status
+            update_journal_progress(
+                progress_data, journal_name,
+                status=resumed_status,
+                total_pages=current_page,
+                current_page=current_page,
+                last_error=stop_reason,
+                last_error_at=now,
+            )
+        else:
+            final_status = "failed"
+            update_journal_progress(
+                progress_data, journal_name,
+                status="failed",
+                total_pages=current_page,
+                last_error=stop_reason,
+                last_error_at=now,
+            )
+    else:
+        final_status = "completed"
+        update_journal_progress(
+            progress_data, journal_name,
+            status="completed",
+            total_pages=current_page,
+            last_error=None,
+            last_error_at=None,
+        )
     save_progress(progress_data)
 
     log_message(f"✓ {journal_name}: {final_status} | 论文{total_papers}篇 | 页数{current_page - start_page} | 原因={stop_reason}")
@@ -752,6 +908,20 @@ def execute_journal_fetching(validated_journals: Dict[str, Dict[str, Any]],
     total_papers = 0
     total_rows = 0
 
+    def should_fetch_journal(name: str, journal_info: Dict[str, Any]) -> bool:
+        status = journal_info.get("status")
+        if status in ["valid", "in_progress"]:
+            return True
+        if status == "failed":
+            existing = progress_data["journals"].get(name)
+            if not existing:
+                return False
+            return (
+                is_retryable_request_error(existing.get("last_error")) or
+                is_legacy_retryable_failed_journal(existing)
+            )
+        return False
+
     # 统计各状态
     status_count = {
         "completed": len([j for j in progress_data["journals"].values()
@@ -763,9 +933,7 @@ def execute_journal_fetching(validated_journals: Dict[str, Dict[str, Any]],
     # 待处理的期刊
     pending_journals = [
         (name, info) for name, info in validated_journals.items()
-        if info["status"] == "valid" or
-           (name in progress_data["journals"] and
-            progress_data["journals"][name]["status"] in ["valid", "in_progress"])
+        if should_fetch_journal(name, info)
     ]
 
     with tqdm(total=len(pending_journals), desc="   进度",
@@ -774,14 +942,15 @@ def execute_journal_fetching(validated_journals: Dict[str, Dict[str, Any]],
             # 检查状态
             if journal_name in progress_data["journals"]:
                 existing = progress_data["journals"][journal_name]
-                if existing["status"] == "completed":
-                    status_count["completed"] += 1
-                    total_papers += existing.get("papers_fetched", 0)
-                    pbar.update(1)
-                    continue
-                elif existing["status"] == "in_progress":
+                if existing["status"] == "in_progress":
                     start_page = existing.get("current_page", 0)
                     status_count["in_progress"] += 1
+                elif existing["status"] == "failed" and is_retryable_request_error(existing.get("last_error")):
+                    start_page = existing.get("current_page", 0)
+                    if existing.get("papers_fetched", 0) > 0:
+                        status_count["in_progress"] += 1
+                    else:
+                        status_count["pending"] += 1
                 else:
                     start_page = 0
                     status_count["pending"] += 1

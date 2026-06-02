@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-05-09T05:43:48.121Z",
-  "turn_count": 165,
-  "last_progress_at": "2026-05-09T05:43:48.121Z",
-  "last_agent_output": "当前进度是：上一轮已经失败退出过一次，我刚刚用同一个进度文件重新续跑了。\n\n失败原因是 CNIPA 接口在 `2026-05-08 / pubtype=1 / bucket=17` 连续 5 次返回："
+  "last_turn_at": "2026-06-01T09:25:39.351Z",
+  "turn_count": 258,
+  "last_progress_at": "2026-06-01T09:25:39.351Z",
+  "last_agent_output": "aplish，错误点在你 Windows 本机：`127.0.0.1:18123` 这个本地端口不能绑定，不是 ClickHouse 认证问题。先直接换一个本地 HTTP 端口，或者只保留 nativ"
 }

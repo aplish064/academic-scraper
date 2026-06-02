@@ -56,19 +56,112 @@ START_DATE = "20260410"
 END_YEAR = 1936
 SKIP_FIRST_DAY_OF_MONTH = False
 
-# 并发与重试配置
-MAX_CONCURRENT_DAYS = 16
+# 并发与重试配置（支持环境变量覆盖）
 PER_PAGE = 200
-REQUEST_TIMEOUT = 60.0
 MAX_RETRIES = 3
-RETRY_WAIT_SECONDS = 3
-PAGE_REQUEST_INTERVAL = 0.05
-BATCH_WRITE_THRESHOLD = 9000
 
-PROJECT_ROOT = Path(__file__).parent.parent.absolute()
-LOG_DIR = PROJECT_ROOT / "log"
+DEFAULT_MAX_CONCURRENT_DAYS = 4
+DEFAULT_REQUEST_TIMEOUT = 60.0
+DEFAULT_RETRY_WAIT_SECONDS = 3
+DEFAULT_PAGE_REQUEST_INTERVAL = 0.05
+DEFAULT_BATCH_WRITE_THRESHOLD = 9000
+DEFAULT_HTTP2_ENABLED = False
+
+ENV_MAX_CONCURRENT_DAYS = "OPENALEX_MAX_CONCURRENT_DAYS"
+ENV_REQUEST_TIMEOUT = "OPENALEX_REQUEST_TIMEOUT"
+ENV_RETRY_WAIT_SECONDS = "OPENALEX_RETRY_WAIT_SECONDS"
+ENV_PAGE_REQUEST_INTERVAL = "OPENALEX_PAGE_REQUEST_INTERVAL"
+ENV_BATCH_WRITE_THRESHOLD = "OPENALEX_BATCH_WRITE_THRESHOLD"
+ENV_HTTP2_ENABLED = "OPENALEX_HTTP2_ENABLED"
+
+
+@dataclass(frozen=True)
+class OpenAlexRuntimeConfig:
+    max_concurrent_days: int
+    request_timeout: float
+    retry_wait_seconds: float
+    page_request_interval: float
+    batch_write_threshold: int
+    http2_enabled: bool
+
+
+def _parse_int(value: Any, *, default: int, minimum: int = 1) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
+def _parse_float(value: Any, *, default: float, minimum: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
+def _parse_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return default
+
+
+def load_runtime_config(env: Optional[Dict[str, str]] = None) -> OpenAlexRuntimeConfig:
+    env_vars = env if env is not None else os.environ
+    return OpenAlexRuntimeConfig(
+        max_concurrent_days=_parse_int(env_vars.get(ENV_MAX_CONCURRENT_DAYS), default=DEFAULT_MAX_CONCURRENT_DAYS),
+        request_timeout=_parse_float(
+            env_vars.get(ENV_REQUEST_TIMEOUT),
+            default=DEFAULT_REQUEST_TIMEOUT,
+            minimum=0.1,
+        ),
+        retry_wait_seconds=_parse_float(
+            env_vars.get(ENV_RETRY_WAIT_SECONDS),
+            default=DEFAULT_RETRY_WAIT_SECONDS,
+            minimum=0.0,
+        ),
+        page_request_interval=_parse_float(
+            env_vars.get(ENV_PAGE_REQUEST_INTERVAL),
+            default=DEFAULT_PAGE_REQUEST_INTERVAL,
+            minimum=0.0,
+        ),
+        batch_write_threshold=_parse_int(
+            env_vars.get(ENV_BATCH_WRITE_THRESHOLD),
+            default=DEFAULT_BATCH_WRITE_THRESHOLD,
+            minimum=1,
+        ),
+        http2_enabled=_parse_bool(env_vars.get(ENV_HTTP2_ENABLED), default=DEFAULT_HTTP2_ENABLED),
+    )
+
+
+_RUNTIME_CONFIG = load_runtime_config()
+MAX_CONCURRENT_DAYS = _RUNTIME_CONFIG.max_concurrent_days
+REQUEST_TIMEOUT = _RUNTIME_CONFIG.request_timeout
+RETRY_WAIT_SECONDS = _RUNTIME_CONFIG.retry_wait_seconds
+PAGE_REQUEST_INTERVAL = _RUNTIME_CONFIG.page_request_interval
+BATCH_WRITE_THRESHOLD = _RUNTIME_CONFIG.batch_write_threshold
+HTTP2_ENABLED = _RUNTIME_CONFIG.http2_enabled
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
+LOG_DIR = PROJECT_ROOT / "log" / "papers" / "openalex"
+LEGACY_LOG_DIR = PROJECT_ROOT / "log"
 LOG_FILE = LOG_DIR / "openalex_fetch_fast.log"
 PROGRESS_FILE = LOG_DIR / "openalex_fetch_progress.json"
+LEGACY_PROGRESS_FILE = LEGACY_LOG_DIR / "openalex_fetch_progress.json"
 
 OPENALEX_TABLE_COLUMNS = [
     "author_id",
@@ -141,6 +234,8 @@ def setup_logging() -> None:
         f"start_time={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"scope={START_DATE} -> {END_YEAR}\n"
         f"concurrency={MAX_CONCURRENT_DAYS}\n"
+        f"request_timeout={REQUEST_TIMEOUT}s retry_wait={RETRY_WAIT_SECONDS}s "
+        f"page_interval={PAGE_REQUEST_INTERVAL}s batch_threshold={BATCH_WRITE_THRESHOLD} http2={HTTP2_ENABLED}\n"
         f"{'=' * 84}\n"
     )
     with open(LOG_FILE, "a", encoding="utf-8") as file:
@@ -167,8 +262,16 @@ def create_clickhouse_client():
         log_message("clickhouse_connected=true")
         return client
     except Exception as exc:
-        log_message(f"clickhouse_connect_failed error={exc}", "ERROR")
+        log_message(f"clickhouse_connect_failed error={_format_exception(exc)}", "ERROR")
         return None
+
+
+def _format_exception(exc: Exception) -> str:
+    exc_type = type(exc).__name__
+    message = str(exc)
+    if message:
+        return f"{exc_type} message={message} repr={repr(exc)}"
+    return f"{exc_type} message=<empty> repr={repr(exc)}"
 
 
 def get_empty_progress() -> Dict[str, Any]:
@@ -176,10 +279,13 @@ def get_empty_progress() -> Dict[str, Any]:
 
 
 def load_progress() -> Dict[str, Any]:
-    if not PROGRESS_FILE.exists():
+    progress_file = PROGRESS_FILE
+    if not progress_file.exists() and LEGACY_PROGRESS_FILE.exists():
+        progress_file = LEGACY_PROGRESS_FILE
+    if not progress_file.exists():
         return get_empty_progress()
     try:
-        with open(PROGRESS_FILE, "r", encoding="utf-8") as file:
+        with open(progress_file, "r", encoding="utf-8") as file:
             data = json.load(file)
             if not isinstance(data, dict):
                 return get_empty_progress()
@@ -408,7 +514,7 @@ def batch_insert_clickhouse(client, rows: List[Dict[str, Any]]) -> bool:
         client.command(f"DROP TABLE IF EXISTS {CH_DATABASE}.{temp_table}")
         return True
     except Exception as exc:
-        log_message(f"clickhouse_insert_failed error={exc}", "ERROR")
+        log_message(f"clickhouse_insert_failed error={_format_exception(exc)}", "ERROR")
         return False
 
 
@@ -462,7 +568,10 @@ async def probe_credential(http_client: httpx.AsyncClient, credential: Credentia
             timeout=10.0,
         )
     except Exception as exc:
-        log_message(f"credential_probe_failed credential={credential.display} error={exc}", "WARNING")
+        log_message(
+            f"credential_probe_failed credential={credential.display} error={_format_exception(exc)}",
+            "WARNING",
+        )
         return True
 
     if response.status_code == 429:
@@ -538,12 +647,20 @@ async def fetch_openalex_day(
             )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             if retry_count >= MAX_RETRIES:
-                return {"date_str": date_str, "status": "error", "error": str(exc)}
+                return {
+                    "date_str": date_str,
+                    "status": "error",
+                    "error": _format_exception(exc),
+                }
             retry_count += 1
             await asyncio.sleep(RETRY_WAIT_SECONDS)
             continue
         except Exception as exc:
-            return {"date_str": date_str, "status": "error", "error": str(exc)}
+            return {
+                "date_str": date_str,
+                "status": "error",
+                "error": _format_exception(exc),
+            }
 
         if response.status_code == 429:
             retry_after = extract_retry_after_seconds(response)
@@ -576,7 +693,11 @@ async def fetch_openalex_day(
         try:
             data = response.json()
         except Exception as exc:
-            return {"date_str": date_str, "status": "error", "error": f"invalid_json: {exc}"}
+            return {
+                "date_str": date_str,
+                "status": "error",
+                "error": f"invalid_json: {_format_exception(exc)}",
+            }
 
         results = data.get("results", []) or []
         if not results:
@@ -704,7 +825,12 @@ async def run_round_for_credential(
         disable=disable_tqdm,
     )
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, limits=limits, http2=True, headers=headers) as client:
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT,
+        limits=limits,
+        http2=HTTP2_ENABLED,
+        headers=headers,
+    ) as client:
         quota_ok = await probe_credential(client, credential)
         if not quota_ok:
             day_pbar.close()
@@ -744,7 +870,10 @@ async def run_round_for_credential(
                         pending_after_round.append(date_str)
                     else:
                         counters["error_days"] += 1
-                        log_message(f"day_fetch_failed date={date_str} error={result.get('error')}", "WARNING")
+                        log_message(
+                            f"day_fetch_failed date={date_str} error={result.get('error', '<empty>')}",
+                            "WARNING",
+                        )
                         pending_after_round.append(date_str)
 
                 queue.task_done()
@@ -807,8 +936,10 @@ async def main_async() -> None:
         return
 
     log_message(
-        f"configuration start_date={START_DATE} end_year={END_YEAR} concurrency={MAX_CONCURRENT_DAYS} "
-        f"credentials={len(credentials)} anonymous_enabled={ENABLE_ANONYMOUS_FALLBACK}"
+        f"configuration start_date={START_DATE} end_year={END_YEAR} "
+        f"concurrency={MAX_CONCURRENT_DAYS} timeout={REQUEST_TIMEOUT}s retry_wait={RETRY_WAIT_SECONDS}s "
+        f"page_interval={PAGE_REQUEST_INTERVAL}s batch_threshold={BATCH_WRITE_THRESHOLD}s "
+        f"http2={HTTP2_ENABLED} credentials={len(credentials)} anonymous_enabled={ENABLE_ANONYMOUS_FALLBACK}"
     )
 
     while True:
@@ -866,7 +997,7 @@ def main() -> None:
     except KeyboardInterrupt:
         log_message("interrupted_by_user", "WARNING")
     except Exception as exc:
-        log_message(f"fatal_error={exc}", "ERROR")
+        log_message(f"fatal_error={_format_exception(exc)}", "ERROR")
         import traceback
 
         traceback.print_exc()

@@ -13,7 +13,8 @@ import random
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+import re
+from typing import Any, Callable, Dict, List, Optional, Set
 import feedparser
 import clickhouse_connect
 from tqdm import tqdm
@@ -37,6 +38,8 @@ RECOVERY_MAX_ATTEMPTS = 12    # 恢复重试最大次数
 PROBE_TIMEOUT = 15            # 可用性探测超时（秒）
 PROBE_QUERY = "all:electron"
 DATE_QUERY_FIELD_DEFAULT = "submittedDate"  # 按“当天发表/提交”抓取默认口径
+DAILY_DAEMON_DEFAULT_RUN_AT = "00:00"
+DAILY_DAEMON_DEFAULT_CHECK_DAYS = 30
 
 # 时间范围配置
 START_DATE = "2026-04-22"     # 开始日期
@@ -60,11 +63,13 @@ ARXIV_TABLE_COLUMNS = [
 DEDUP_KEY_COLUMNS = [column for column in ARXIV_TABLE_COLUMNS if column != 'import_date']
 
 # 文件路径配置
-PROJECT_ROOT = Path(__file__).parent.parent.absolute()
-LOG_DIR = PROJECT_ROOT / "log"
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
+LOG_DIR = PROJECT_ROOT / "log" / "papers" / "arxiv"
+LEGACY_LOG_DIR = PROJECT_ROOT / "log"
 PROGRESS_FILE = LOG_DIR / "arxiv_fetch_progress.json"
 LOG_FILE = LOG_DIR / "arxiv_fetch.log"
 ERROR_LOG_FILE = LOG_DIR / "arxiv_errors.log"
+LEGACY_PROGRESS_FILE = LEGACY_LOG_DIR / "arxiv_fetch_progress.json"
 
 # 日志配置
 LOG_BUFFER_SIZE = 100         # 日志缓冲大小
@@ -128,6 +133,7 @@ def log_message(message: str, level: str = "INFO"):
 def flush_log_buffer():
     """刷新日志缓冲区到文件"""
     if log_buffer:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.writelines(log_buffer)
         log_buffer.clear()
@@ -138,9 +144,12 @@ def flush_log_buffer():
 
 def load_progress() -> Dict[str, Any]:
     """加载进度文件"""
-    if PROGRESS_FILE.exists():
+    progress_file = PROGRESS_FILE
+    if not progress_file.exists() and LEGACY_PROGRESS_FILE.exists():
+        progress_file = LEGACY_PROGRESS_FILE
+    if progress_file.exists():
         try:
-            with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+            with open(progress_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
             log_message("进度文件损坏，创建新文件", "WARNING")
@@ -164,6 +173,7 @@ def get_empty_progress() -> Dict[str, Any]:
 
 def save_progress(progress: Dict[str, Any]):
     """保存进度文件"""
+    PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         progress['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -182,6 +192,41 @@ def date_to_key(date_str: str) -> str:
 def key_to_date(key: str) -> str:
     """将进度文件键转换为日期字符串 (YYYY-MM-DD)"""
     return f"{key[:4]}-{key[4:6]}-{key[6:]}"
+
+
+def get_yesterday_date(reference_datetime: Optional[datetime] = None) -> str:
+    """获取参考时间的前一天（YYYY-MM-DD）"""
+    reference = reference_datetime or datetime.now()
+    return (reference - timedelta(days=1)).strftime('%Y-%m-%d')
+
+
+def strip_arxiv_version_suffix(arxiv_id: str) -> str:
+    """将 arXiv ID 的版本后缀去掉（例如 2401.0001v2 -> 2401.0001）"""
+    return re.sub(r"v\d+$", "", arxiv_id or "")
+
+
+def build_daily_check_dates(yesterday: str, check_days: int) -> List[str]:
+    """生成昨日往前若干天的日期列表（倒序），不含昨日"""
+    if check_days <= 0:
+        return []
+
+    current = datetime.strptime(yesterday, '%Y-%m-%d') - timedelta(days=1)
+    dates = []
+    for _ in range(check_days):
+        dates.append(current.strftime('%Y-%m-%d'))
+        current -= timedelta(days=1)
+    return dates
+
+
+def dedupe_date_sequence(dates: List[str]) -> List[str]:
+    """去重并保持顺序"""
+    seen: Set[str] = set()
+    output: List[str] = []
+    for date_str in dates:
+        if date_str not in seen:
+            seen.add(date_str)
+            output.append(date_str)
+    return output
 
 
 def build_date_query(date_str: str, date_field: str = DATE_QUERY_FIELD_DEFAULT) -> str:
@@ -295,6 +340,88 @@ def parse_total_results(xml_data: str) -> Optional[int]:
         return int(value)
     except Exception:
         return None
+
+
+def get_api_total_for_date(
+    date_str: str,
+    date_field: str = DATE_QUERY_FIELD_DEFAULT,
+    request_fn: Callable[[str, dict], Optional[str]] = None
+) -> Optional[int]:
+    """查询某日论文总数（opensearch totalResults）"""
+    request_fn = request_fn or make_request
+    search_query = build_date_query(date_str, date_field)
+    xml_data = request_fn(
+        ARXIV_API_BASE,
+        {"search_query": search_query, "start": 0, "max_results": 1}
+    )
+    return parse_total_results(xml_data)
+
+
+def get_db_distinct_base_id_count_for_date(client, date_str: str) -> int:
+    """统计某日数据库中按 base arXiv ID 去重后的数量"""
+    if not client:
+        return 0
+
+    try:
+        normalized_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        log_message(f"⚠️  无效日期格式，跳过数据库计数: {date_str}", "WARNING")
+        return 0
+
+    query = f"""
+        SELECT countDistinct(replaceRegexpOne(arxiv_id, 'v[0-9]+$', '')) AS base_id_count
+        FROM {CH_DATABASE}.{CH_TABLE}
+        WHERE toDate(published) = toDate('{normalized_date}')
+    """
+    try:
+        result = client.query(query)
+        if not result or not getattr(result, "result_rows", None):
+            return 0
+
+        first_row = result.result_rows[0]
+        if isinstance(first_row, dict):
+            return int(next(iter(first_row.values()), 0) or 0)
+        if isinstance(first_row, (tuple, list)):
+            return int(first_row[0] or 0)
+        return int(first_row or 0)
+    except Exception as e:
+        log_message(f"⚠️  读取数据库日去重计数失败: {date_str}: {e}", "WARNING")
+        return 0
+
+
+def find_missed_dates(
+    check_dates: List[str],
+    client,
+    api_total_fetcher: Callable[[str, str], Optional[int]] = get_api_total_for_date,
+    db_count_fetcher: Callable[[object, str], int] = get_db_distinct_base_id_count_for_date,
+    api_date_field: str = DATE_QUERY_FIELD_DEFAULT
+) -> List[str]:
+    """找出 API 总数大于数据库去重计数的日期（疑似漏抓）"""
+    missed_dates: List[str] = []
+    for date_str in check_dates:
+        api_total = api_total_fetcher(date_str, api_date_field)
+        db_count = db_count_fetcher(client, date_str)
+        if api_total is None:
+            continue
+        if api_total > db_count:
+            missed_dates.append(date_str)
+    return missed_dates
+
+
+def compute_next_sleep_seconds(run_at: str, now: Optional[datetime] = None) -> int:
+    """计算到下一次执行时间（HH:MM）的秒数"""
+    schedule_time = datetime.strptime(run_at, "%H:%M").time()
+    now_dt = now or datetime.now()
+    schedule_dt = datetime.combine(now_dt.date(), schedule_time)
+    if now_dt >= schedule_dt:
+        schedule_dt += timedelta(days=1)
+    return int((schedule_dt - now_dt).total_seconds())
+
+
+def parse_run_at(value: str) -> str:
+    """验证 HH:MM 参数"""
+    datetime.strptime(value, "%H:%M")
+    return value
 
 # =============================================================================
 # HTTP 客户端（带重试机制）
@@ -914,7 +1041,11 @@ class ArxivFetcher:
         recovery_max_attempts: int = RECOVERY_MAX_ATTEMPTS,
         recovery_base_wait: int = RECOVERY_BASE_WAIT,
         recovery_max_wait: int = RECOVERY_MAX_WAIT,
-        date_field: str = DATE_QUERY_FIELD_DEFAULT
+        date_field: str = DATE_QUERY_FIELD_DEFAULT,
+        daily_daemon: bool = False,
+        daily_check_days: int = DAILY_DAEMON_DEFAULT_CHECK_DAYS,
+        daily_run_at: str = DAILY_DAEMON_DEFAULT_RUN_AT,
+        daily_run_once: bool = False
     ):
         """初始化
 
@@ -940,6 +1071,89 @@ class ArxivFetcher:
         self.recovery_base_wait = max(1, recovery_base_wait)
         self.recovery_max_wait = max(self.recovery_base_wait, recovery_max_wait)
         self.date_field = date_field if date_field in ("submittedDate", "lastUpdatedDate") else DATE_QUERY_FIELD_DEFAULT
+        self.daily_daemon = daily_daemon
+        self.daily_check_days = max(0, daily_check_days)
+        self.daily_run_at = daily_run_at
+        self.daily_run_once = daily_run_once
+
+    def _run_daily_cycle(self, reference_datetime: Optional[datetime] = None) -> Dict[str, int]:
+        """执行一次每日增量周期（用于 daemon 或 run-once）"""
+        yesterday = get_yesterday_date(reference_datetime)
+        log_message(f"昨日日期: {yesterday}")
+
+        check_dates = build_daily_check_dates(yesterday, self.daily_check_days)
+        missed_dates = find_missed_dates(
+            check_dates,
+            self.ch_client,
+            api_date_field=DATE_QUERY_FIELD_DEFAULT
+        )
+        if missed_dates:
+            log_message(f"发现缺漏日期: {missed_dates}")
+        else:
+            log_message("缺漏日期: 无")
+
+        target_dates = dedupe_date_sequence([yesterday] + missed_dates)
+        stats = {"successful_dates": 0, "failed_dates": 0}
+
+        for date_str in target_dates:
+            success = fetch_papers_by_date(
+                date_str,
+                self.progress,
+                self.ch_client,
+                per_page=self.per_page,
+                request_interval=self.request_interval,
+                dry_run=self.dry_run,
+                enable_recovery_retry=self.enable_recovery_retry,
+                recovery_max_attempts=self.recovery_max_attempts,
+                recovery_base_wait=self.recovery_base_wait,
+                recovery_max_wait=self.recovery_max_wait,
+                date_field=DATE_QUERY_FIELD_DEFAULT
+            )
+            if success:
+                stats['successful_dates'] += 1
+            else:
+                stats['failed_dates'] += 1
+
+        return stats
+
+    def run_daily_once(self):
+        """运行一次每日模式周期（测试/手动触发）"""
+        if not self.ch_client:
+            log_message("❌ 无法连接到 ClickHouse", "ERROR")
+            return
+
+        log_message("=" * 60)
+        log_message("arXiv Daily Daemon：单次运行")
+        log_message("=" * 60)
+
+        create_arxiv_table(self.ch_client)
+        return self._run_daily_cycle()
+
+    def run_daily_loop(self):
+        """循环运行 daily daemon。可通过 --daily-run-once 跳出循环"""
+        if not self.ch_client:
+            log_message("❌ 无法连接到 ClickHouse", "ERROR")
+            return
+
+        create_arxiv_table(self.ch_client)
+
+        while True:
+            cycle_start = datetime.now()
+            log_message("=" * 60)
+            log_message(f"Cycle Start: {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
+            log_message("=" * 60)
+
+            self._run_daily_cycle(cycle_start)
+
+            if self.daily_run_once:
+                log_message("single-run 模式，退出 daemon 循环")
+                break
+
+            cycle_end = datetime.now()
+            sleep_seconds = compute_next_sleep_seconds(self.daily_run_at, now=cycle_end)
+            next_run = cycle_end + timedelta(seconds=sleep_seconds)
+            log_message(f"下一轮运行: {next_run.strftime('%Y-%m-%d %H:%M:%S')}（{sleep_seconds}s）")
+            time.sleep(sleep_seconds)
 
     def run(self):
         """执行主流程"""
@@ -1047,8 +1261,8 @@ class ArxivFetcher:
         log_message("=" * 60)
 
 
-def main():
-    """主函数"""
+def parse_args(argv=None):
+    """解析参数"""
     import argparse
 
     parser = argparse.ArgumentParser(description='arXiv 论文获取工具')
@@ -1080,33 +1294,63 @@ def main():
                        help='恢复重试最大等待秒数')
     parser.add_argument('--date-field', choices=['submittedDate', 'lastUpdatedDate'], default=DATE_QUERY_FIELD_DEFAULT,
                        help='按天抓取口径：submittedDate(当天提交) 或 lastUpdatedDate(当天更新)')
+    parser.add_argument('--daily-daemon', action='store_true',
+                       help='启用 daily daemon 模式')
+    parser.add_argument('--daily-check-days', type=int, default=DAILY_DAEMON_DEFAULT_CHECK_DAYS,
+                       help='daily 模式下检查前 N 天是否缺漏（默认 30）')
+    parser.add_argument('--daily-run-at', default=DAILY_DAEMON_DEFAULT_RUN_AT, type=parse_run_at,
+                       help='daily daemon 的运行时间点，格式 HH:MM')
+    parser.add_argument('--daily-run-once', action='store_true',
+                       help='daily daemon 模式下只运行一个周期后退出')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.daily_check_days < 0:
+        parser.error('--daily-check-days 必须 >= 0')
+
+    return args
+
+
+def create_fetcher_from_args(args):
+    """根据参数创建 Fetcher"""
+    return ArxivFetcher(
+        args.start_date,
+        args.end_year,
+        test_days=args.test_days,
+        request_interval=args.interval,
+        per_page=args.per_page,
+        dry_run=args.dry_run,
+        from_date=args.from_date,
+        to_date=args.to_date,
+        respect_progress_in_window=args.respect_progress_in_window,
+        enable_recovery_retry=args.recovery_retry,
+        recovery_max_attempts=args.recovery_max_attempts,
+        recovery_base_wait=args.recovery_base_wait,
+        recovery_max_wait=args.recovery_max_wait,
+        date_field=args.date_field,
+        daily_daemon=args.daily_daemon,
+        daily_check_days=args.daily_check_days,
+        daily_run_at=args.daily_run_at,
+        daily_run_once=args.daily_run_once
+    )
+
+
+def main(argv=None):
+    """主函数"""
+    args = parse_args(argv)
 
     # 设置日志
     setup_logging()
 
     try:
         # 创建 fetcher
-        fetcher = ArxivFetcher(
-            args.start_date,
-            args.end_year,
-            test_days=args.test_days,
-            request_interval=args.interval,
-            per_page=args.per_page,
-            dry_run=args.dry_run,
-            from_date=args.from_date,
-            to_date=args.to_date,
-            respect_progress_in_window=args.respect_progress_in_window,
-            enable_recovery_retry=args.recovery_retry,
-            recovery_max_attempts=args.recovery_max_attempts,
-            recovery_base_wait=args.recovery_base_wait,
-            recovery_max_wait=args.recovery_max_wait,
-            date_field=args.date_field
-        )
+        fetcher = create_fetcher_from_args(args)
 
         # 运行
-        fetcher.run()
+        if args.daily_daemon:
+            fetcher.run_daily_loop()
+        else:
+            fetcher.run()
 
     except KeyboardInterrupt:
         log_message("\n⚠️  用户中断")

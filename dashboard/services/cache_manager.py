@@ -339,11 +339,33 @@ class CacheManager:
 
         # 收集所有期刊用于合并
         all_journals = {}
+        stat_totals = {
+            'total_papers': 0,
+            'unique_authors': 0,
+            'unique_journals': 0,
+            'unique_institutions': 0,
+            'high_citations': 0,
+        }
+        fwci_values = []
 
         # 合并各数据源的数据
         for source_data in sources_data:
             source_name = source_data.get('source', 'unknown')
             merged['_source_data'][source_name] = source_data
+            source_stats = source_data.get('statistics', {}) or {}
+
+            for stat_key in stat_totals:
+                try:
+                    stat_totals[stat_key] += int(source_stats.get(stat_key) or 0)
+                except (TypeError, ValueError):
+                    pass
+
+            try:
+                avg_fwci = float(source_stats.get('avg_fwci') or 0)
+                if avg_fwci > 0:
+                    fwci_values.append(avg_fwci)
+            except (TypeError, ValueError):
+                pass
 
             # 合并论文按日期统计
             for date, count in source_data.get('papers_by_date', {}).items():
@@ -386,6 +408,8 @@ class CacheManager:
         # 按数量排序期刊，取前50
         sorted_journals = sorted(all_journals.items(), key=lambda x: x[1], reverse=True)[:50]
         merged['top_journals'] = dict(sorted_journals)
+        merged['statistics'] = stat_totals
+        merged['statistics']['avg_fwci'] = round(sum(fwci_values) / len(fwci_values), 2) if fwci_values else 0
 
         return merged
 

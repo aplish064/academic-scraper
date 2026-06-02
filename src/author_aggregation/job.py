@@ -136,6 +136,10 @@ class AuthorAggregationJob:
                 ingest_state=ingest_state,
                 fallback_watermark=effective_default_watermark,
             )
+            source_max_watermark = normalize_datetime(self.repository.get_max_watermark(source))
+            if source_max_watermark and source_watermark > source_max_watermark:
+                source_watermark = source_max_watermark
+
             effective_window_hours = (
                 source_window_hours.get(source, window_hours) if source_window_hours else window_hours
             )
@@ -175,7 +179,10 @@ class AuthorAggregationJob:
                     )
                     next_watermark = max(source_watermark, max_import_time)
                 else:
-                    next_watermark = window_end
+                    if source_max_watermark:
+                        next_watermark = min(window_end, source_max_watermark)
+                    else:
+                        next_watermark = source_watermark
                 successful_watermarks[source] = next_watermark
             except Exception as exc:
                 observations_by_source[source] = 0

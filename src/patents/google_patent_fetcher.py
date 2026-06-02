@@ -6,11 +6,12 @@ import json
 import os
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, Iterator, List
+from pathlib import Path
 
 try:
-    from src import cn_patent_fetcher
+    from . import cnipa_importer as cn_patent_fetcher
 except ImportError:  # pragma: no cover - supports direct script execution from src/
-    import cn_patent_fetcher  # type: ignore
+    import cnipa_importer as cn_patent_fetcher  # type: ignore
 
 SOURCE_NAME = "google_patents"
 PUBLICATIONS_TABLE = "patents-public-data.patents.publications"
@@ -31,6 +32,13 @@ PUBLICATION_COLUMNS = [
     "ipc",
     "cpc",
 ]
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_LOG_FILE = "log/patents/google/google_patent_fetcher.log"
+DEFAULT_PROGRESS_FILE = "log/patents/google/google_patent_fetch_progress.json"
+LEGACY_LOG_FILE = str(PROJECT_ROOT / "log" / "google_patent_fetcher.log")
+LEGACY_PROGRESS_FILE = str(PROJECT_ROOT / "log" / "google_patent_fetch_progress.json")
 
 
 def parse_args(argv: Any = None) -> argparse.Namespace:
@@ -57,8 +65,8 @@ def parse_args(argv: Any = None) -> argparse.Namespace:
     parser.add_argument("--no-resume-windowed", dest="resume_windowed", action="store_false")
     parser.set_defaults(resume_windowed=True)
     parser.add_argument("--credentials", default="data/patent-494208-e330c3351d40.json")
-    parser.add_argument("--log-file", default="log/google_patent_fetcher.log")
-    parser.add_argument("--progress-file", default="log/google_patent_fetch_progress.json")
+    parser.add_argument("--log-file", default=DEFAULT_LOG_FILE)
+    parser.add_argument("--progress-file", default=DEFAULT_PROGRESS_FILE)
     return parser.parse_args(argv)
 
 
@@ -955,10 +963,13 @@ def write_progress(progress_file: str = "", **fields: Any) -> None:
 
 
 def load_progress_file(progress_file: str = "") -> Dict[str, Any]:
-    if not progress_file or not os.path.exists(progress_file):
+    target = progress_file or DEFAULT_PROGRESS_FILE
+    if target == DEFAULT_PROGRESS_FILE and not os.path.exists(target) and os.path.exists(LEGACY_PROGRESS_FILE):
+        target = LEGACY_PROGRESS_FILE
+    if not os.path.exists(target):
         return {}
     try:
-        with open(progress_file, "r", encoding="utf-8") as handle:
+        with open(target, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         if isinstance(data, dict):
             return data

@@ -962,6 +962,11 @@
         let charts = {};
         let currentDataSource = 'all'; // 'all', 'openalex', 'semantic', 'dblp', 'arxiv', 'patents'
         let latestDataRequestId = 0;
+        const API_BASE = window.location.pathname.startsWith('/academic') ? '/academic/api' : '/api';
+
+        function apiUrl(path) {
+            return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+        }
 
         // Toast notification system
         function showToast(message, type = 'info') {
@@ -1189,7 +1194,7 @@
                 updateLoading('正在从服务器获取聚合数据...');
 
                 // 根据数据源构建URL
-                let url = '/api/aggregated';
+                let url = apiUrl('/aggregated');
                 if (requestedSource !== 'all') {
                     url += `?source=${requestedSource}`;
                 } else {

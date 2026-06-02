@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import clickhouse_connect
 import httpx
+from pathlib import Path
 
 
 PATENT_API_URL = "https://search.patentsview.org/api/v1/patent/"
@@ -44,9 +45,12 @@ MAX_RETRIES = 3
 REQUEST_TIMEOUT = 60.0
 DOWNLOAD_TIMEOUT = 300.0
 
-LOG_DIR = "/home/hkustgz/Us/academic-scraper/log"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOG_DIR = str(PROJECT_ROOT / "log" / "patents" / "patentsview")
+LEGACY_LOG_DIR = str(PROJECT_ROOT / "log")
 LOG_FILE = os.path.join(LOG_DIR, "patent_fetcher.log")
 PROGRESS_FILE = os.path.join(LOG_DIR, "patent_fetch_progress.json")
+LEGACY_PROGRESS_FILE = os.path.join(LEGACY_LOG_DIR, "patent_fetch_progress.json")
 
 PATENT_FIELDS = [
     "patent_id",
@@ -701,6 +705,8 @@ def default_progress() -> Dict[str, Any]:
 
 
 def load_progress(progress_file: str = PROGRESS_FILE) -> Dict[str, Any]:
+    if progress_file == PROGRESS_FILE and not os.path.exists(progress_file) and os.path.exists(LEGACY_PROGRESS_FILE):
+        progress_file = LEGACY_PROGRESS_FILE
     if not os.path.exists(progress_file):
         return default_progress()
     with open(progress_file, "r", encoding="utf-8") as f:
