@@ -51,6 +51,8 @@ class CvBuilderConfig:
     crossref_base_url: str
     crossref_mailto: str
     crossref_user_agent: str
+    semantic_base_url: str
+    semantic_api_key: str
     request_timeout: float
 
 
@@ -113,5 +115,10 @@ def get_config(load_dotenv: bool = True, env_file: Path | None = None) -> CvBuil
             "CROSSREF_USER_AGENT",
             "Top-Talent-Academic/1.0",
         ),
+        semantic_base_url=os.environ.get(
+            "SEMANTIC_BASE_URL",
+            "https://api.semanticscholar.org/graph/v1",
+        ),
+        semantic_api_key=os.environ.get("SEMANTIC_API_KEY", ""),
         request_timeout=_get_float_env("CV_BUILDER_REQUEST_TIMEOUT", 30.0, min_value=0.1),
     )
