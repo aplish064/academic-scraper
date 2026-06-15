@@ -8,8 +8,11 @@ from src.cv_builder.config import get_config
 from src.cv_builder.crossref_client import CrossrefClient
 from src.cv_builder.openalex_client import OpenAlexClient
 from src.cv_builder.orcid_client import OrcidClient
+from src.cv_builder.orcid_resolver import OrcidResolver
 from src.cv_builder.repository import CvRepository
 from src.cv_builder.runner import CvBuildRunner
+from src.cv_builder.semantic_scholar_client import SemanticScholarClient
+from src.cv_builder.semantic_scholar_resolver import SemanticScholarResolver
 
 
 def positive_int(value: str) -> int:
@@ -28,11 +31,15 @@ def build_repository():
 
 
 def build_runner(repository, config):
+    orcid_client = OrcidClient(config)
+    semantic_client = SemanticScholarClient(config)
     return CvBuildRunner(
         repository=repository,
         openalex_client=OpenAlexClient(config),
-        orcid_client=OrcidClient(config),
+        orcid_client=orcid_client,
         crossref_client=CrossrefClient(config),
+        orcid_resolver=OrcidResolver(orcid_client),
+        semantic_resolver=SemanticScholarResolver(semantic_client),
     )
 
 

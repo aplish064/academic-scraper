@@ -198,6 +198,45 @@ def build_research_output_row(person_id: str, openalex_work: dict, crossref_work
     }
 
 
+def build_semantic_research_output_row(person_id: str, semantic_paper: dict) -> dict:
+    if not clean_text(person_id):
+        return {}
+    paper = semantic_paper or {}
+    external_ids = paper.get("externalIds") or {}
+    stable_key = clean_text(external_ids.get("DOI") or external_ids.get("doi") or paper.get("doi"))
+    if not stable_key:
+        stable_key = clean_text(paper.get("paperId"))
+    title = clean_text(paper.get("title"))
+    if not title or not stable_key:
+        return {}
+
+    paper_id = clean_text(paper.get("paperId"))
+    publication_types = _ensure_list(paper.get("publicationTypes"))
+    authors = [
+        clean_text(author.get("name"))
+        for author in _ensure_list(paper.get("authors"))
+        if isinstance(author, dict)
+    ]
+    authors = [author for author in authors if author]
+    source_url = clean_text(paper.get("url"))
+    if not source_url and paper_id:
+        source_url = f"https://www.semanticscholar.org/paper/{paper_id}"
+
+    return {
+        "id": make_research_output_id(person_id, f"S2:{stable_key}"),
+        "author_id": person_id,
+        "work_title": title,
+        "work_type": _first_list_value(publication_types),
+        "venue_name": clean_text(paper.get("venue")),
+        "publication_date": clean_text(paper.get("publicationDate")) or clean_text(paper.get("year")),
+        "citation_count": _non_negative_int_or_none(paper.get("citationCount")),
+        "authors": json.dumps(authors, ensure_ascii=False),
+        "source": "semantic_scholar",
+        "source_url": source_url,
+        "import_time": datetime.now(),
+    }
+
+
 def build_funding_rows(person_id: str, orcid_record: dict) -> list:
     if not clean_text(person_id):
         return []
