@@ -81,6 +81,15 @@ class FakeOrcidResolver:
         return self.result
 
 
+class RaisingOrcidResolver:
+    def __init__(self):
+        self.requests = []
+
+    def resolve(self, openalex_author, openalex_works):
+        self.requests.append((openalex_author, list(openalex_works)))
+        raise RuntimeError("orcid fallback unavailable")
+
+
 class FakeCrossrefClient:
     def __init__(self, works=None):
         self.works = works or {}
@@ -102,6 +111,15 @@ class FakeSemanticResolver:
         from src.cv_builder.semantic_scholar_resolver import SemanticScholarResolution
 
         return SemanticScholarResolution(self.confirmed_author, self.supplemental_papers)
+
+
+class RaisingSemanticResolver:
+    def __init__(self):
+        self.requests = []
+
+    def resolve(self, openalex_author, openalex_works, existing_work_ids):
+        self.requests.append((openalex_author, list(openalex_works), set(existing_work_ids)))
+        raise RuntimeError("semantic fallback unavailable")
 
 
 def test_process_author_happy_path_writes_profile_orcid_rows_and_research_outputs_once():
@@ -228,6 +246,39 @@ def test_process_author_uses_orcid_resolver_when_openalex_has_no_orcid():
     assert repository.profiles[0]["bio"] == "Computer pioneer."
 
 
+def test_process_author_ignores_orcid_resolver_failure_and_writes_openalex_rows(caplog):
+    person_id = make_person_id("A123")
+    author = {"id": "A123", "display_name": "Ada Lovelace"}
+    openalex_work = {"id": "W456", "title": "OpenAlex Paper"}
+    repository = FakeRepository()
+    openalex_client = FakeOpenAlexClient(
+        authors={"A123": author},
+        author_work_ids={"A123": ["W456"]},
+        works={"W456": openalex_work},
+    )
+    orcid_resolver = RaisingOrcidResolver()
+    runner = CvBuildRunner(
+        repository,
+        openalex_client,
+        FakeOrcidClient(),
+        FakeCrossrefClient(),
+        orcid_resolver=orcid_resolver,
+    )
+
+    result = runner.process_author("A123")
+
+    assert result == person_id
+    assert len(orcid_resolver.requests) == 1
+    assert repository.statuses == [
+        ("A123", person_id, "processing", ""),
+        ("A123", person_id, "done", ""),
+    ]
+    assert repository.profiles[0]["source"] == "openalex"
+    assert repository.profiles[0]["orcid"] == ""
+    assert [row["work_title"] for row in repository.research_outputs[0]] == ["OpenAlex Paper"]
+    assert "ORCID fallback resolver failed" in caplog.text
+
+
 def test_process_author_adds_confirmed_semantic_scholar_supplemental_work():
     person_id = make_person_id("A123")
     author = {
@@ -278,6 +329,42 @@ def test_process_author_adds_confirmed_semantic_scholar_supplemental_work():
     s2_row = repository.research_outputs[0][1]
     assert s2_row["citation_count"] == 7
     assert s2_row["source"] == "semantic_scholar"
+
+
+def test_process_author_ignores_semantic_resolver_failure_and_writes_openalex_rows(caplog):
+    person_id = make_person_id("A123")
+    author = {
+        "id": "A123",
+        "display_name": "Ada Lovelace",
+        "summary_stats": {"h_index": 42},
+    }
+    openalex_work = {"id": "W456", "title": "OpenAlex Paper"}
+    repository = FakeRepository()
+    openalex_client = FakeOpenAlexClient(
+        authors={"A123": author},
+        author_work_ids={"A123": ["W456"]},
+        works={"W456": openalex_work},
+    )
+    semantic_resolver = RaisingSemanticResolver()
+    runner = CvBuildRunner(
+        repository,
+        openalex_client,
+        FakeOrcidClient(),
+        FakeCrossrefClient(),
+        semantic_resolver=semantic_resolver,
+    )
+
+    result = runner.process_author("A123")
+
+    assert result == person_id
+    assert len(semantic_resolver.requests) == 1
+    assert repository.statuses == [
+        ("A123", person_id, "processing", ""),
+        ("A123", person_id, "done", ""),
+    ]
+    assert repository.profiles[0]["h_index"] == 42
+    assert [row["work_title"] for row in repository.research_outputs[0]] == ["OpenAlex Paper"]
+    assert "Semantic Scholar resolver failed" in caplog.text
 
 
 def test_process_author_uses_semantic_h_index_when_openalex_h_index_missing():

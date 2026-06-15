@@ -73,7 +73,11 @@ class CvBuildRunner:
             orcid = normalize_orcid(openalex_author.get("orcid"))
             orcid_record = self.orcid_client.get_record(orcid) if orcid else {}
             if self.orcid_resolver and (not orcid or not orcid_record):
-                resolved_orcid, resolved_record = self.orcid_resolver.resolve(openalex_author, openalex_works)
+                try:
+                    resolved_orcid, resolved_record = self.orcid_resolver.resolve(openalex_author, openalex_works)
+                except Exception:
+                    _LOG.warning("ORCID fallback resolver failed for %s", author_id, exc_info=True)
+                    resolved_orcid, resolved_record = "", {}
                 resolved_orcid = normalize_orcid(resolved_orcid)
                 if resolved_orcid and resolved_record:
                     openalex_author = {**openalex_author, "orcid": resolved_orcid}
@@ -82,11 +86,20 @@ class CvBuildRunner:
             semantic_resolution = None
             if self.semantic_resolver:
                 existing_work_ids = {row.get("id") for row in research_output_rows if row.get("id")}
-                semantic_resolution = self.semantic_resolver.resolve(openalex_author, openalex_works, existing_work_ids)
-                openalex_author = _with_semantic_h_index_fallback(
-                    openalex_author,
-                    semantic_resolution.confirmed_author,
-                )
+                try:
+                    semantic_resolution = self.semantic_resolver.resolve(
+                        openalex_author,
+                        openalex_works,
+                        existing_work_ids,
+                    )
+                except Exception:
+                    _LOG.warning("Semantic Scholar resolver failed for %s", author_id, exc_info=True)
+                    semantic_resolution = None
+                if semantic_resolution:
+                    openalex_author = _with_semantic_h_index_fallback(
+                        openalex_author,
+                        semantic_resolution.confirmed_author,
+                    )
             profile_row = build_profile_row(openalex_author, orcid_record)
             if not profile_row:
                 self.repository.mark_author_status(author_id, person_id, "skipped", "invalid_profile")
