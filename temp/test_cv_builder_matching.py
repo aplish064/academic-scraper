@@ -38,7 +38,11 @@ def test_names_are_similar_accepts_exact_normalized_name_match():
 
 
 def test_names_are_similar_accepts_two_token_overlap_without_exact_match():
-    assert names_are_similar("Alpha Beta Gamma Delta", ["Alpha Beta Epsilon Zeta"])
+    assert names_are_similar("Junyou Wei Zhang", ["Junyou Zhang"])
+
+
+def test_names_are_similar_rejects_two_token_overlap_with_different_last_name():
+    assert not names_are_similar("Michael John Smith", ["Michael John Brown"])
 
 
 def test_names_are_similar_accepts_initial_last_name_variant():

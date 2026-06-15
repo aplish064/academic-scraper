@@ -42,7 +42,7 @@ def names_are_similar(name, aliases: Iterable) -> bool:
         if normalized_name == normalized_alias:
             return True
         alias_tokens = normalized_alias.split()
-        if len(set(name_tokens) & set(alias_tokens)) >= 2:
+        if _has_two_token_overlap_with_same_last_name(name_tokens, alias_tokens):
             return True
         if _initial_last_name_match(name_tokens, alias_tokens):
             return True
@@ -91,6 +91,14 @@ def _initial_last_name_match(left_tokens, right_tokens) -> bool:
     return _tokens_match_initial_last(left_tokens, right_tokens) or _tokens_match_initial_last(
         right_tokens, left_tokens
     )
+
+
+def _has_two_token_overlap_with_same_last_name(left_tokens, right_tokens) -> bool:
+    if not left_tokens or not right_tokens:
+        return False
+    if left_tokens[-1] != right_tokens[-1]:
+        return False
+    return len(set(left_tokens) & set(right_tokens)) >= 2
 
 
 def _tokens_match_initial_last(full_tokens, initial_tokens) -> bool:
