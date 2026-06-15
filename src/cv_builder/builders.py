@@ -33,6 +33,18 @@ def clean_text(value) -> str:
     return text
 
 
+def _non_negative_int_or_none(value):
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
 def normalize_openalex_id(value: str) -> str:
     """Normalize an OpenAlex author ID to its compact A... form."""
     return _normalize_openalex_entity_id(value, _OPENALEX_AUTHOR_ID_RE, "A")
@@ -85,6 +97,7 @@ def build_profile_row(openalex_author: dict, orcid_record: dict) -> dict:
         "bio": extract_orcid_bio(record),
         "country": _openalex_country(author),
         "email": extract_orcid_email(record),
+        "h_index": _non_negative_int_or_none((author.get("summary_stats") or {}).get("h_index")),
         "source": "openalex+orcid" if record else "openalex",
         "source_url": _openalex_source_url(author.get("id"), openalex_id),
         "import_time": datetime.now(),
@@ -177,6 +190,7 @@ def build_research_output_row(person_id: str, openalex_work: dict, crossref_work
         "work_type": work_type,
         "venue_name": venue_name,
         "publication_date": publication_date,
+        "citation_count": _non_negative_int_or_none(work.get("cited_by_count")),
         "authors": json.dumps(authors, ensure_ascii=False),
         "source": "openalex+crossref" if crossref else "openalex",
         "source_url": _openalex_source_url(work.get("id"), work_id),
