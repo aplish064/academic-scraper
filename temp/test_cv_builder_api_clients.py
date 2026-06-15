@@ -443,6 +443,26 @@ def test_orcid_client_decodes_percent_encoded_doi_before_search():
     assert session.get_calls[0][1]["params"]["q"] == 'doi-self:"10.1234/a?b#c"'
 
 
+def test_orcid_client_rejects_unsafe_doi_search_before_token():
+    client = OrcidClient(make_config())
+    session = FakeSession()
+    client.session = session
+
+    assert client.search_by_doi("https://doi.org/10.1234/a%22b") == []
+    assert session.post_calls == []
+    assert session.get_calls == []
+
+
+def test_orcid_client_rejects_unsafe_title_search_before_token():
+    client = OrcidClient(make_config())
+    session = FakeSession()
+    client.session = session
+
+    assert client.search_by_title('bad " title') == []
+    assert session.post_calls == []
+    assert session.get_calls == []
+
+
 def test_orcid_client_refreshes_token_once_after_unauthorized():
     client = OrcidClient(make_config())
     session = FakeSession(

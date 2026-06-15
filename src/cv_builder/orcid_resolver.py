@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from .builders import clean_text, normalize_orcid
+from .builders import clean_text, normalize_openalex_id, normalize_orcid
 from .matching import names_are_similar
 from .orcid_client import _normalize_doi
 
@@ -75,7 +75,9 @@ class OrcidResolver:
 
 def _author_aliases(openalex_author: dict, works: list[dict]) -> list[str]:
     aliases = []
-    author_name = clean_text((openalex_author or {}).get("display_name"))
+    author = openalex_author or {}
+    target_author_id = normalize_openalex_id(author.get("id") or author.get("openalex_id"))
+    author_name = clean_text(author.get("display_name"))
     if author_name:
         aliases.append(author_name)
 
@@ -83,7 +85,13 @@ def _author_aliases(openalex_author: dict, works: list[dict]) -> list[str]:
         for authorship in _ensure_list(work.get("authorships")):
             if not isinstance(authorship, dict):
                 continue
-            authorship_name = clean_text((authorship.get("author") or {}).get("display_name"))
+            authorship_author = authorship.get("author") or {}
+            authorship_author_id = normalize_openalex_id(
+                authorship_author.get("id") or authorship_author.get("openalex_id")
+            )
+            if not target_author_id or authorship_author_id != target_author_id:
+                continue
+            authorship_name = clean_text(authorship_author.get("display_name"))
             if authorship_name:
                 aliases.append(authorship_name)
     return _dedupe(aliases)

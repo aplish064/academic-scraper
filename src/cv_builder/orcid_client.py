@@ -41,6 +41,10 @@ def _normalize_doi(value: str) -> str:
     return unquote(normalized_doi).strip()
 
 
+def _is_safe_search_term(value: str) -> bool:
+    return '"' not in value and "\\" not in value
+
+
 class OrcidClient:
     def __init__(self, config: CvBuilderConfig) -> None:
         self.config = config
@@ -114,13 +118,13 @@ class OrcidClient:
 
     def search_by_doi(self, doi: str) -> list[str]:
         normalized_doi = _normalize_doi(doi)
-        if not normalized_doi or not _DOI_PATTERN.match(normalized_doi):
+        if not normalized_doi or not _DOI_PATTERN.match(normalized_doi) or not _is_safe_search_term(normalized_doi):
             return []
         return self._expanded_search(f'doi-self:"{normalized_doi}"')
 
     def search_by_title(self, title: str) -> list[str]:
         normalized_title = " ".join(str(title).strip().split())
-        if not normalized_title:
+        if not normalized_title or not _is_safe_search_term(normalized_title):
             return []
         return self._expanded_search(f'work-titles:"{normalized_title}"')
 

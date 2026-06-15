@@ -74,14 +74,35 @@ def test_orcid_resolver_accepts_single_doi_match_when_record_name_matches_alias(
         {
             "doi": "10.1234/one",
             "display_name": "Reliable Paper",
-            "authorships": [{"author": {"display_name": "Ada Lovelace"}}],
+            "authorships": [
+                {"author": {"id": "https://openalex.org/A1", "display_name": "Ada Lovelace"}}
+            ],
         }
     ]
 
-    assert OrcidResolver(client).resolve({"display_name": "Augusta Ada King"}, works) == (
+    assert OrcidResolver(client).resolve({"id": "A1", "display_name": "Augusta Ada King"}, works) == (
         "0000-0001-0000-0000",
         record,
     )
+
+
+def test_orcid_resolver_does_not_match_coauthor_name_on_shared_doi():
+    grace_record = make_record(orcid="0000-0002-0000-0000", credit_name="Grace Hopper")
+    client = FakeOrcidClient(
+        doi_results={"10.1/shared": ["0000-0002-0000-0000"]},
+        records={"0000-0002-0000-0000": grace_record},
+    )
+    works = [
+        {
+            "doi": "10.1/shared",
+            "authorships": [
+                {"author": {"id": "A1", "display_name": "Ada Lovelace"}},
+                {"author": {"id": "A2", "display_name": "Grace Hopper"}},
+            ],
+        }
+    ]
+
+    assert OrcidResolver(client).resolve({"id": "A1", "display_name": "Ada Lovelace"}, works) == ("", {})
 
 
 def test_orcid_resolver_rejects_single_doi_match_when_record_name_does_not_match():
