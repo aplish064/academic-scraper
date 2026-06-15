@@ -189,6 +189,35 @@ def test_semantic_resolver_does_not_confirm_coauthor_on_shared_paper():
     assert client.author_calls == []
 
 
+def test_semantic_resolver_rejects_ambiguous_same_name_authors_on_single_doi_paper():
+    ambiguous_paper = s2_paper(
+        "S2P1",
+        "Ambiguous Identity Paper",
+        2024,
+        "10.7777/ambiguous",
+        [
+            s2_author("S2A1", "Ada Lovelace"),
+            s2_author("S2A2", "A. Lovelace"),
+        ],
+    )
+    client = FakeSemanticClient(
+        doi_papers={"10.7777/ambiguous": ambiguous_paper},
+        authors={
+            "S2A1": {"authorId": "S2A1", "hIndex": 4, "papers": [ambiguous_paper]},
+            "S2A2": {"authorId": "S2A2", "hIndex": 5, "papers": [ambiguous_paper]},
+        },
+    )
+    works = [openalex_work("10.7777/ambiguous", "Ambiguous Identity Paper", 2024)]
+
+    result = SemanticScholarResolver(client).resolve(
+        {"id": "A1", "display_name": "Ada Lovelace"}, works, set()
+    )
+
+    assert result.confirmed_author == {}
+    assert result.supplemental_papers == []
+    assert client.author_calls == []
+
+
 def test_semantic_resolver_deduplicates_existing_doi_work():
     matched_paper = s2_paper(
         "S2P1",
@@ -227,6 +256,62 @@ def test_semantic_resolver_deduplicates_existing_doi_work():
         {"id": "A1", "display_name": "Ada Lovelace"},
         works,
         {"s2:S2P2"},
+    )
+
+    assert result.confirmed_author["authorId"] == "S2A1"
+    assert result.supplemental_papers == [new_paper]
+
+
+def test_semantic_resolver_deduplicates_existing_title_year_work_without_doi():
+    matched_paper_one = s2_paper(
+        "S2P1",
+        "Reliable Identity Paper One",
+        2021,
+        "10.1111/one",
+        [s2_author("S2A1", "Ada Lovelace")],
+    )
+    matched_paper_two = s2_paper(
+        "S2P2",
+        "Reliable Identity Paper Two",
+        2022,
+        "10.1111/two",
+        [s2_author("S2A1", "Ada Lovelace")],
+    )
+    duplicate_without_doi = s2_paper(
+        "S2P3",
+        "Existing OpenAlex Title Without DOI",
+        2023,
+        "",
+        [s2_author("S2A1", "Ada Lovelace")],
+    )
+    new_paper = s2_paper(
+        "S2P4",
+        "New Semantic Scholar Title",
+        2024,
+        "",
+        [s2_author("S2A1", "Ada Lovelace")],
+    )
+    client = FakeSemanticClient(
+        doi_papers={"10.1111/one": matched_paper_one, "10.1111/two": matched_paper_two},
+        authors={
+            "S2A1": {
+                "authorId": "S2A1",
+                "hIndex": 12,
+                "papers": [duplicate_without_doi, new_paper],
+            }
+        },
+    )
+    existing_without_year = openalex_work("", "Existing OpenAlex Title Without DOI", 2024)
+    existing_without_year.pop("publication_year")
+    existing_without_year["publication_date"] = "2023-06-01"
+    works = [
+        openalex_work("10.1111/one", "Reliable Identity Paper One", 2021),
+        openalex_work("10.1111/two", "Reliable Identity Paper Two", 2022),
+        existing_without_year,
+    ]
+
+    result = SemanticScholarResolver(client).resolve(
+        {"id": "A1", "display_name": "Ada Lovelace"}, works, set()
     )
 
     assert result.confirmed_author["authorId"] == "S2A1"

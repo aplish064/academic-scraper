@@ -57,14 +57,13 @@ class SemanticScholarResolver:
             paper, doi_exact = self._semantic_paper_for_work(work)
             if not paper:
                 continue
-            for author in _paper_authors(paper):
-                author_id = clean_text(author.get("authorId"))
-                author_name = clean_text(author.get("name"))
-                if not author_id or not names_are_similar(author_name, aliases):
-                    continue
-                counts[author_id] += 1
-                if doi_exact:
-                    doi_exact_counts[author_id] += 1
+            author = _single_matching_paper_author(paper, aliases)
+            if not author:
+                continue
+            author_id = clean_text(author.get("authorId"))
+            counts[author_id] += 1
+            if doi_exact:
+                doi_exact_counts[author_id] += 1
 
         return counts, doi_exact_counts
 
@@ -130,6 +129,8 @@ def _supplemental_papers(
 ) -> list[dict]:
     openalex_dois = {_normalize_doi(work.get("doi")) for work in openalex_works}
     openalex_dois.discard("")
+    openalex_title_year_keys = {_title_year_key(work) for work in openalex_works}
+    openalex_title_year_keys.discard("")
     existing_keys = {clean_text(value).lower() for value in existing_work_ids or set() if clean_text(value)}
     seen_keys = set()
     papers = []
@@ -143,6 +144,8 @@ def _supplemental_papers(
         paper_doi = _paper_doi(paper)
         if paper_doi and paper_doi in openalex_dois:
             continue
+        if _title_year_key(paper) in openalex_title_year_keys:
+            continue
 
         key = _paper_key(paper)
         paper_id_key = f"s2:{clean_text(paper.get('paperId'))}".lower()
@@ -155,6 +158,18 @@ def _supplemental_papers(
         papers.append(paper)
 
     return papers
+
+
+def _single_matching_paper_author(paper: dict, aliases: list[str]) -> dict:
+    matching_authors = [
+        author
+        for author in _paper_authors(paper)
+        if clean_text(author.get("authorId"))
+        and names_are_similar(clean_text(author.get("name")), aliases)
+    ]
+    if len(matching_authors) != 1:
+        return {}
+    return matching_authors[0]
 
 
 def _paper_has_confirmed_author(paper: dict, author_id: str, aliases: list[str]) -> bool:
@@ -181,12 +196,24 @@ def _work_title(work: dict) -> str:
 
 
 def _work_year(work: dict):
-    return work.get("publication_year") or work.get("year")
+    return _year_value(work.get("publication_year") or work.get("year") or work.get("publication_date"))
 
 
 def _paper_doi(paper: dict) -> str:
     external_ids = (paper or {}).get("externalIds") or {}
     return _normalize_doi(external_ids.get("DOI") or external_ids.get("doi") or paper.get("doi"))
+
+
+def _paper_year(paper: dict):
+    return _year_value(paper.get("year") or paper.get("publicationDate") or paper.get("publication_date"))
+
+
+def _title_year_key(value: dict) -> str:
+    title = normalize_title(value.get("title") or value.get("display_name"))
+    year = clean_text(_paper_year(value) or _work_year(value))
+    if not title or not year:
+        return ""
+    return f"{title}:{year}"
 
 
 def _paper_authors(paper: dict) -> list[dict]:
@@ -230,6 +257,13 @@ def _normalize_doi(value) -> str:
         text = parsed.path.lstrip("/")
 
     return unquote(text).strip().lower()
+
+
+def _year_value(value) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    return text[:4] if len(text) >= 4 and text[:4].isdigit() else text
 
 
 def _dedupe(values) -> list[str]:
