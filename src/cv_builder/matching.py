@@ -46,7 +46,9 @@ def names_are_similar(name, aliases: Iterable) -> bool:
             return True
         if _initial_last_name_match(name_tokens, alias_tokens):
             return True
-        if SequenceMatcher(None, normalized_name, normalized_alias).ratio() >= 0.88:
+        if _same_last_name(name_tokens, alias_tokens) and (
+            SequenceMatcher(None, normalized_name, normalized_alias).ratio() >= 0.88
+        ):
             return True
 
     return False
@@ -94,11 +96,15 @@ def _initial_last_name_match(left_tokens, right_tokens) -> bool:
 
 
 def _has_two_token_overlap_with_same_last_name(left_tokens, right_tokens) -> bool:
-    if not left_tokens or not right_tokens:
-        return False
-    if left_tokens[-1] != right_tokens[-1]:
+    if not _same_last_name(left_tokens, right_tokens):
         return False
     return len(set(left_tokens) & set(right_tokens)) >= 2
+
+
+def _same_last_name(left_tokens, right_tokens) -> bool:
+    if not left_tokens or not right_tokens:
+        return False
+    return left_tokens[-1] == right_tokens[-1]
 
 
 def _tokens_match_initial_last(full_tokens, initial_tokens) -> bool:

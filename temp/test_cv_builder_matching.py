@@ -45,6 +45,14 @@ def test_names_are_similar_rejects_two_token_overlap_with_different_last_name():
     assert not names_are_similar("Michael John Smith", ["Michael John Brown"])
 
 
+def test_names_are_similar_accepts_fuzzy_match_with_same_last_name():
+    assert names_are_similar("Junyou Zhang", ["Juny Zhang"])
+
+
+def test_names_are_similar_rejects_fuzzy_match_with_different_last_name():
+    assert not names_are_similar("Michael Johnson", ["Michael John"])
+
+
 def test_names_are_similar_accepts_initial_last_name_variant():
     assert names_are_similar("Junyou Zhang", ["J. Zhang"])
 
