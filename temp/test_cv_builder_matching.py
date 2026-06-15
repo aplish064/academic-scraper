@@ -16,6 +16,13 @@ def test_titles_are_similar_accepts_equal_normalized_titles():
     assert titles_are_similar("A Study of AI Systems", "a study: of ai systems")
 
 
+def test_titles_are_similar_accepts_high_sequence_ratio_without_exact_match():
+    assert titles_are_similar(
+        "A Comprehensive Study of AI Systems",
+        "A Comprehensive Study of AI System",
+    )
+
+
 def test_titles_are_similar_rejects_short_or_different_titles():
     assert not titles_are_similar("AI", "AI")
     assert not titles_are_similar("A Study of AI Systems", "A Different Biology Paper")
@@ -24,6 +31,18 @@ def test_titles_are_similar_rejects_short_or_different_titles():
 def test_normalize_name_removes_punctuation_and_lowercases():
     assert normalize_name("Junyou Zhang") == "junyou zhang"
     assert normalize_name("Zhang, Junyou") == "zhang junyou"
+
+
+def test_names_are_similar_accepts_exact_normalized_name_match():
+    assert names_are_similar("Zhang, Junyou", ["Zhang Junyou"])
+
+
+def test_names_are_similar_accepts_two_token_overlap_without_exact_match():
+    assert names_are_similar("Alpha Beta Gamma Delta", ["Alpha Beta Epsilon Zeta"])
+
+
+def test_names_are_similar_accepts_initial_last_name_variant():
+    assert names_are_similar("Junyou Zhang", ["J. Zhang"])
 
 
 def test_names_are_similar_accepts_token_overlap_and_initial_variant():
@@ -40,7 +59,19 @@ def test_years_are_compatible_accepts_same_or_missing_year():
     assert not years_are_compatible(2020, 2022)
 
 
+def test_years_are_compatible_accepts_unparseable_year_on_either_side():
+    assert years_are_compatible("unknown", 2020)
+    assert years_are_compatible(2020, "unknown")
+
+
 def test_author_rank_matches_accepts_same_or_nearby_rank():
     assert author_rank_matches(3, 3)
     assert author_rank_matches(3, 4)
     assert not author_rank_matches(3, 7)
+
+
+def test_author_rank_matches_rejects_missing_or_unparseable_ranks():
+    assert not author_rank_matches(None, 3)
+    assert not author_rank_matches(3, None)
+    assert not author_rank_matches("unknown", 3)
+    assert not author_rank_matches(3, "unknown")
