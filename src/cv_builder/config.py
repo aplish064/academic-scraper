@@ -51,9 +51,9 @@ class CvBuilderConfig:
     crossref_base_url: str
     crossref_mailto: str
     crossref_user_agent: str
-    semantic_base_url: str
-    semantic_api_key: str
-    request_timeout: float
+    semantic_base_url: str = "https://api.semanticscholar.org/graph/v1"
+    semantic_api_key: str = ""
+    request_timeout: float = 30.0
 
 
 def _get_legacy_env(primary_key: str, legacy_key: str, default: str = "") -> str:

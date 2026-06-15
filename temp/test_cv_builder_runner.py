@@ -71,6 +71,15 @@ class FakeOrcidClient:
         return self.records.get(orcid, {})
 
 
+class RaisingOrcidClient:
+    def __init__(self):
+        self.requests = []
+
+    def get_record(self, orcid):
+        self.requests.append(orcid)
+        raise RuntimeError("orcid record unavailable")
+
+
 class FakeOrcidResolver:
     def __init__(self, result=("", {})):
         self.result = result
@@ -277,6 +286,42 @@ def test_process_author_ignores_orcid_resolver_failure_and_writes_openalex_rows(
     assert repository.profiles[0]["orcid"] == ""
     assert [row["work_title"] for row in repository.research_outputs[0]] == ["OpenAlex Paper"]
     assert "ORCID fallback resolver failed" in caplog.text
+
+
+def test_process_author_ignores_orcid_record_failure_and_writes_openalex_rows(caplog):
+    person_id = make_person_id("A123")
+    author = {
+        "id": "A123",
+        "display_name": "Ada Lovelace",
+        "orcid": "https://orcid.org/0000-0001-0000-0000",
+    }
+    openalex_work = {"id": "W456", "title": "OpenAlex Paper"}
+    repository = FakeRepository()
+    openalex_client = FakeOpenAlexClient(
+        authors={"A123": author},
+        author_work_ids={"A123": ["W456"]},
+        works={"W456": openalex_work},
+    )
+    orcid_client = RaisingOrcidClient()
+    runner = CvBuildRunner(
+        repository,
+        openalex_client,
+        orcid_client,
+        FakeCrossrefClient(),
+    )
+
+    result = runner.process_author("A123")
+
+    assert result == person_id
+    assert orcid_client.requests == ["0000-0001-0000-0000"]
+    assert repository.statuses == [
+        ("A123", person_id, "processing", ""),
+        ("A123", person_id, "done", ""),
+    ]
+    assert repository.profiles[0]["source"] == "openalex"
+    assert repository.profiles[0]["orcid"] == "0000-0001-0000-0000"
+    assert [row["work_title"] for row in repository.research_outputs[0]] == ["OpenAlex Paper"]
+    assert "ORCID record fetch failed" in caplog.text
 
 
 def test_process_author_adds_confirmed_semantic_scholar_supplemental_work():

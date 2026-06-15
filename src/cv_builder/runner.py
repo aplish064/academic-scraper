@@ -71,7 +71,12 @@ class CvBuildRunner:
             )
 
             orcid = normalize_orcid(openalex_author.get("orcid"))
-            orcid_record = self.orcid_client.get_record(orcid) if orcid else {}
+            orcid_record = {}
+            if orcid:
+                try:
+                    orcid_record = self.orcid_client.get_record(orcid)
+                except Exception:
+                    _LOG.warning("ORCID record fetch failed for %s", author_id, exc_info=True)
             if self.orcid_resolver and (not orcid or not orcid_record):
                 try:
                     resolved_orcid, resolved_record = self.orcid_resolver.resolve(openalex_author, openalex_works)

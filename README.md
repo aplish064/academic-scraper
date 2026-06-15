@@ -48,6 +48,8 @@ venv/bin/python3 -m src.cv_builder.cli process-next --work-limit 200 --count 20
 
 研究成果候选作品会先从 OpenAlex API 按作者分页获取，再合并本地 OpenAlex 表中的候选作品并去重；`--work-limit` 控制每位作者最多处理的作品数。
 
+Supplemental source development uses a review gate: after schema and resolver logic changes, regenerate `output/academic_cv_sample_20/*.csv` for the same 20 authors and stop for review before running larger queues.
+
 ## 主要特性
 
 - ⚡ **异步高性能**：使用 async I/O + HTTP/2，速度提升 20-50 倍
