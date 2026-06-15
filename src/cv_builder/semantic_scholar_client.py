@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 import requests
 
@@ -54,9 +54,17 @@ AUTHOR_FIELDS = ",".join(
 
 def _normalize_doi(doi: str) -> str:
     normalized_doi = str(doi).strip()
+    if not normalized_doi:
+        return ""
+
     if normalized_doi.lower().startswith("doi:"):
-        return normalized_doi[4:].strip()
-    return normalized_doi
+        return unquote(normalized_doi[4:]).strip()
+
+    parsed = urlsplit(normalized_doi)
+    if parsed.scheme in {"http", "https"} and parsed.netloc.lower() in {"doi.org", "dx.doi.org"}:
+        return unquote(parsed.path.lstrip("/")).strip()
+
+    return unquote(normalized_doi).strip()
 
 
 class SemanticScholarClient:

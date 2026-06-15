@@ -274,6 +274,69 @@ def test_semantic_scholar_client_gets_paper_by_doi_with_api_key():
     assert "authors" in kwargs["params"]["fields"]
 
 
+def test_semantic_scholar_client_normalizes_common_doi_forms():
+    client = SemanticScholarClient(make_config())
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(payload={"paperId": "S2P1"}),
+            FakeResponse(payload={"paperId": "S2P2"}),
+            FakeResponse(payload={"paperId": "S2P3"}),
+        ]
+    )
+    client.session = session
+
+    assert client.get_paper_by_doi("https://doi.org/10.1234/example") == {"paperId": "S2P1"}
+    assert client.get_paper_by_doi("https://dx.doi.org/10.5678/example") == {"paperId": "S2P2"}
+    assert client.get_paper_by_doi("doi:10.9999/example") == {"paperId": "S2P3"}
+
+    assert (
+        session.get_calls[0][0][0]
+        == "https://api.semanticscholar.org/graph/v1/paper/DOI:10.1234%2Fexample"
+    )
+    assert (
+        session.get_calls[1][0][0]
+        == "https://api.semanticscholar.org/graph/v1/paper/DOI:10.5678%2Fexample"
+    )
+    assert (
+        session.get_calls[2][0][0]
+        == "https://api.semanticscholar.org/graph/v1/paper/DOI:10.9999%2Fexample"
+    )
+
+
+def test_semantic_scholar_client_decodes_percent_encoded_doi_before_request():
+    client = SemanticScholarClient(make_config())
+    session = FakeSession(
+        get_responses=[
+            FakeResponse(payload={"paperId": "S2P1"}),
+            FakeResponse(payload={"paperId": "S2P2"}),
+        ]
+    )
+    client.session = session
+
+    assert client.get_paper_by_doi("doi:10.1234/a%3Fb%23c") == {"paperId": "S2P1"}
+    assert client.get_paper_by_doi("10.1234/a%3Fb%23c") == {"paperId": "S2P2"}
+
+    assert (
+        session.get_calls[0][0][0]
+        == "https://api.semanticscholar.org/graph/v1/paper/DOI:10.1234%2Fa%3Fb%23c"
+    )
+    assert (
+        session.get_calls[1][0][0]
+        == "https://api.semanticscholar.org/graph/v1/paper/DOI:10.1234%2Fa%3Fb%23c"
+    )
+
+
+def test_semantic_scholar_client_omits_api_key_header_when_unconfigured():
+    client = SemanticScholarClient(make_config())
+    session = FakeSession(get_responses=[FakeResponse(payload={"paperId": "S2P1"})])
+    client.session = session
+
+    client.get_paper_by_doi("10.1234/example")
+
+    _, kwargs = session.get_calls[0]
+    assert "x-api-key" not in kwargs["headers"]
+
+
 def test_semantic_scholar_client_searches_papers_by_title():
     client = SemanticScholarClient(make_config())
     session = FakeSession(get_responses=[FakeResponse(payload={"data": [{"paperId": "S2P1"}]})])
