@@ -79,6 +79,14 @@ class CvBuildRunner:
                     openalex_author = {**openalex_author, "orcid": resolved_orcid}
                     orcid = resolved_orcid
                     orcid_record = resolved_record
+            semantic_resolution = None
+            if self.semantic_resolver:
+                existing_work_ids = {row.get("id") for row in research_output_rows if row.get("id")}
+                semantic_resolution = self.semantic_resolver.resolve(openalex_author, openalex_works, existing_work_ids)
+                openalex_author = _with_semantic_h_index_fallback(
+                    openalex_author,
+                    semantic_resolution.confirmed_author,
+                )
             profile_row = build_profile_row(openalex_author, orcid_record)
             if not profile_row:
                 self.repository.mark_author_status(author_id, person_id, "skipped", "invalid_profile")
@@ -86,11 +94,9 @@ class CvBuildRunner:
 
             experience_rows = build_experience_rows(person_id, orcid_record)
             funding_rows = build_funding_rows(person_id, orcid_record)
-            if self.semantic_resolver:
-                existing_work_ids = {row.get("id") for row in research_output_rows if row.get("id")}
-                resolution = self.semantic_resolver.resolve(openalex_author, openalex_works, existing_work_ids)
+            if semantic_resolution:
                 research_output_rows.extend(
-                    self._build_semantic_supplemental_rows(person_id, resolution.supplemental_papers)
+                    self._build_semantic_supplemental_rows(person_id, semantic_resolution.supplemental_papers)
                 )
 
             self.repository.upsert_profile(profile_row)
@@ -165,3 +171,34 @@ def _merge_work_ids(api_work_ids, local_work_ids, limit: int) -> list[str]:
         if len(merged) >= limit:
             break
     return merged
+
+
+def _with_semantic_h_index_fallback(openalex_author: dict, semantic_author: dict) -> dict:
+    author = openalex_author or {}
+    summary_stats = author.get("summary_stats") or {}
+    if _non_negative_int_or_none(summary_stats.get("h_index")) is not None:
+        return author
+
+    semantic_h_index = _non_negative_int_or_none((semantic_author or {}).get("hIndex"))
+    if semantic_h_index is None:
+        return author
+
+    return {
+        **author,
+        "summary_stats": {
+            **summary_stats,
+            "h_index": semantic_h_index,
+        },
+    }
+
+
+def _non_negative_int_or_none(value):
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0:
+        return None
+    return parsed

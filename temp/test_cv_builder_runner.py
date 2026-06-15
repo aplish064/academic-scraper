@@ -280,6 +280,73 @@ def test_process_author_adds_confirmed_semantic_scholar_supplemental_work():
     assert s2_row["source"] == "semantic_scholar"
 
 
+def test_process_author_uses_semantic_h_index_when_openalex_h_index_missing():
+    person_id = make_person_id("A123")
+    author = {"id": "A123", "display_name": "Ada Lovelace"}
+    openalex_work = {
+        "id": "W456",
+        "title": "OpenAlex Paper",
+        "authorships": [{"author": {"id": "A123", "display_name": "Ada Lovelace"}}],
+    }
+    repository = FakeRepository()
+    openalex_client = FakeOpenAlexClient(
+        authors={"A123": author},
+        author_work_ids={"A123": ["W456"]},
+        works={"W456": openalex_work},
+    )
+    semantic_resolver = FakeSemanticResolver(
+        confirmed_author={
+            "authorId": "S2A123",
+            "hIndex": 19,
+            "dblp_pid": "should-not-leak",
+            "evidence": [{"paperId": "W456"}],
+            "status": "confirmed",
+        },
+    )
+    runner = CvBuildRunner(
+        repository,
+        openalex_client,
+        FakeOrcidClient(),
+        FakeCrossrefClient(),
+        semantic_resolver=semantic_resolver,
+    )
+
+    result = runner.process_author("A123")
+
+    assert result == person_id
+    profile = repository.profiles[0]
+    assert profile["h_index"] == 19
+    for forbidden_key in ("semantic_author_id", "dblp_pid", "candidates", "scores", "evidence", "status"):
+        assert forbidden_key not in profile
+
+
+def test_process_author_prefers_openalex_h_index_over_semantic_h_index():
+    author = {
+        "id": "A123",
+        "display_name": "Ada Lovelace",
+        "summary_stats": {"h_index": 42},
+    }
+    openalex_work = {"id": "W456", "title": "OpenAlex Paper"}
+    repository = FakeRepository()
+    openalex_client = FakeOpenAlexClient(
+        authors={"A123": author},
+        author_work_ids={"A123": ["W456"]},
+        works={"W456": openalex_work},
+    )
+    semantic_resolver = FakeSemanticResolver(confirmed_author={"authorId": "S2A123", "hIndex": 19})
+    runner = CvBuildRunner(
+        repository,
+        openalex_client,
+        FakeOrcidClient(),
+        FakeCrossrefClient(),
+        semantic_resolver=semantic_resolver,
+    )
+
+    runner.process_author("A123")
+
+    assert repository.profiles[0]["h_index"] == 42
+
+
 def test_process_author_already_processing_does_not_duplicate_processing_status():
     person_id = make_person_id("A123")
     repository = FakeRepository()
