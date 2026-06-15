@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import requests
 
@@ -12,6 +12,7 @@ from .config import CvBuilderConfig
 
 
 _ORCID_PATTERN = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$")
+_DOI_PATTERN = re.compile(r"^10\.\d{4,9}/\S+$", re.IGNORECASE)
 _TOKEN_EXPIRY_SKEW_SECONDS = 60
 
 
@@ -23,6 +24,21 @@ def _normalize_orcid(orcid: str) -> str:
     if not _ORCID_PATTERN.match(normalized_orcid):
         return ""
     return normalized_orcid
+
+
+def _normalize_doi(value: str) -> str:
+    normalized_doi = str(value).strip()
+    if not normalized_doi:
+        return ""
+
+    if normalized_doi.lower().startswith("doi:"):
+        return unquote(normalized_doi[4:]).strip()
+
+    parsed = urlsplit(normalized_doi)
+    if parsed.scheme in {"http", "https"} and parsed.netloc.lower() in {"doi.org", "dx.doi.org"}:
+        return unquote(parsed.path.lstrip("/")).strip()
+
+    return unquote(normalized_doi).strip()
 
 
 class OrcidClient:
@@ -95,6 +111,49 @@ class OrcidClient:
             return {}
         response.raise_for_status()
         return response.json()
+
+    def search_by_doi(self, doi: str) -> list[str]:
+        normalized_doi = _normalize_doi(doi)
+        if not normalized_doi or not _DOI_PATTERN.match(normalized_doi):
+            return []
+        return self._expanded_search(f'doi-self:"{normalized_doi}"')
+
+    def search_by_title(self, title: str) -> list[str]:
+        normalized_title = " ".join(str(title).strip().split())
+        if not normalized_title:
+            return []
+        return self._expanded_search(f'work-titles:"{normalized_title}"')
+
+    def _expanded_search(self, query: str) -> list[str]:
+        token = self.get_token()
+        if not token:
+            return []
+
+        response = self.session.get(
+            f"{self.config.orcid_base_url.rstrip('/')}/expanded-search/",
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            params={"q": query},
+            timeout=self.config.request_timeout,
+        )
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        results = response.json().get("result", [])
+
+        orcids = []
+        seen = set()
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            normalized_orcid = _normalize_orcid(((result.get("orcid-identifier") or {}).get("path") or ""))
+            if not normalized_orcid or normalized_orcid in seen:
+                continue
+            seen.add(normalized_orcid)
+            orcids.append(normalized_orcid)
+        return orcids
 
     def _get_record_response(self, encoded_orcid: str, token: str) -> requests.Response:
         return self.session.get(

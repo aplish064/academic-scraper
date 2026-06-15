@@ -404,6 +404,45 @@ def test_orcid_client_returns_empty_for_invalid_orcid_without_http():
     assert session.get_calls == []
 
 
+def test_orcid_client_searches_by_doi_after_token():
+    client = OrcidClient(make_config())
+    session = FakeSession(
+        post_responses=[FakeResponse(payload={"access_token": "token", "expires_in": 3600})],
+        get_responses=[FakeResponse(payload={"result": [{"orcid-identifier": {"path": "0000-0001-0000-0000"}}]})],
+    )
+    client.session = session
+
+    assert client.search_by_doi("10.1234/example") == ["0000-0001-0000-0000"]
+
+    args, kwargs = session.get_calls[0]
+    assert args[0].endswith("/expanded-search/")
+    assert kwargs["params"]["q"] == 'doi-self:"10.1234/example"'
+
+
+def test_orcid_client_searches_by_title_after_token():
+    client = OrcidClient(make_config())
+    session = FakeSession(
+        post_responses=[FakeResponse(payload={"access_token": "token", "expires_in": 3600})],
+        get_responses=[FakeResponse(payload={"result": [{"orcid-identifier": {"path": "0000-0002-0000-0000"}}]})],
+    )
+    client.session = session
+
+    assert client.search_by_title("Reliable Paper") == ["0000-0002-0000-0000"]
+    assert session.get_calls[0][1]["params"]["q"] == 'work-titles:"Reliable Paper"'
+
+
+def test_orcid_client_decodes_percent_encoded_doi_before_search():
+    client = OrcidClient(make_config())
+    session = FakeSession(
+        post_responses=[FakeResponse(payload={"access_token": "token", "expires_in": 3600})],
+        get_responses=[FakeResponse(payload={"result": []})],
+    )
+    client.session = session
+
+    assert client.search_by_doi("https://doi.org/10.1234/a%3Fb%23c") == []
+    assert session.get_calls[0][1]["params"]["q"] == 'doi-self:"10.1234/a?b#c"'
+
+
 def test_orcid_client_refreshes_token_once_after_unauthorized():
     client = OrcidClient(make_config())
     session = FakeSession(
