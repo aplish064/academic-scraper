@@ -3,9 +3,9 @@
   "active": true,
   "skill": "tdd",
   "keyword": "TDD",
-  "phase": "executing",
+  "phase": "reviewing",
   "activated_at": "2026-05-13T09:24:07.535Z",
-  "updated_at": "2026-06-01T09:25:39.357Z",
+  "updated_at": "2026-06-05T10:52:09.301Z",
   "source": "keyword-detector",
   "input_lock": null
 }

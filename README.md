@@ -30,6 +30,24 @@ python3 temp/check_duplicates.py
 python3 temp/merge_csv.py
 ```
 
+### Academic CV Builder
+
+```bash
+# 初始化 CV Builder ClickHouse 表
+venv/bin/python3 -m src.cv_builder.cli init-schema
+
+# 从本地 OpenAlex 表初始化作者队列
+venv/bin/python3 -m src.cv_builder.cli init-queue --limit 1000
+
+# 处理指定 OpenAlex 作者
+venv/bin/python3 -m src.cv_builder.cli process-author A123456789 --work-limit 200
+
+# 从队列处理下一批作者
+venv/bin/python3 -m src.cv_builder.cli process-next --work-limit 200 --count 20
+```
+
+研究成果候选作品会先从 OpenAlex API 按作者分页获取，再合并本地 OpenAlex 表中的候选作品并去重；`--work-limit` 控制每位作者最多处理的作品数。
+
 ## 主要特性
 
 - ⚡ **异步高性能**：使用 async I/O + HTTP/2，速度提升 20-50 倍

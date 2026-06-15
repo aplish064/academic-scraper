@@ -27,29 +27,45 @@ import pandas as pd
 from tqdm.asyncio import tqdm
 
 
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
+
+
+def _load_env_file() -> None:
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env_file()
+
 OPENALEX_API_BASE = "https://api.openalex.org"
 
-# OpenAlex 轮换凭据（按顺序使用）
-DEFAULT_OPENALEX_CREDENTIALS: List[Tuple[str, str]] = [
-    ("20228132063@m.scnu.edu.cn", "L9vCNGOe2ILsen4OQP3aPg"),
-    ("29364625666@qq.com", "toZBE5tNglH7oDydLefrKc"),
-    ("13360197039@163.com", "zF5B0bERxfXCZsPF1P5TiY"),
-    ("apl064@outlook.com", "1KyA5m5gjQxBgFetDtko9Q"),
-    ("17818151056@163.com", "2ZiX5542GoZp9VYwHv2jPj"),
-    ("1509901785@qq.com", "Q5QcudPogcFTfvV7vFOH1r"),
-]
-
 # 所有 key 用完后，是否追加一轮匿名抓取
-ENABLE_ANONYMOUS_FALLBACK = True
-RESTART_HOUR = 9
+ENABLE_ANONYMOUS_FALLBACK = os.getenv("OPENALEX_ENABLE_ANONYMOUS_FALLBACK", "1").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+RESTART_HOUR = int(os.getenv("OPENALEX_RESTART_HOUR", "9"))
 
 # ClickHouse 配置
-CH_HOST = "localhost"
-CH_PORT = 8123
-CH_DATABASE = "academic_db"
+CH_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+CH_PORT = int(os.getenv("CLICKHOUSE_PORT", "8123"))
+CH_DATABASE = os.getenv("CLICKHOUSE_DATABASE", "academic_db")
 CH_TABLE = "OpenAlex"
-CH_USERNAME = "default"
-CH_PASSWORD = ""
+CH_USERNAME = os.getenv("CLICKHOUSE_USER", "default")
+CH_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
 
 # 日期范围配置
 START_DATE = "20260410"
@@ -156,7 +172,6 @@ PAGE_REQUEST_INTERVAL = _RUNTIME_CONFIG.page_request_interval
 BATCH_WRITE_THRESHOLD = _RUNTIME_CONFIG.batch_write_threshold
 HTTP2_ENABLED = _RUNTIME_CONFIG.http2_enabled
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 LOG_DIR = PROJECT_ROOT / "log" / "papers" / "openalex"
 LEGACY_LOG_DIR = PROJECT_ROOT / "log"
 LOG_FILE = LOG_DIR / "openalex_fetch_fast.log"
@@ -192,6 +207,34 @@ ROW_FLOAT_FIELDS = {"fwci"}
 ROW_BOOL_FIELDS = {"is_retracted"}
 
 RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
+
+
+def load_openalex_credentials(env: Optional[Dict[str, str]] = None) -> List[Tuple[str, str]]:
+    env_vars = env if env is not None else os.environ
+    raw_credentials = env_vars.get("OPENALEX_CREDENTIALS", "").strip()
+    credentials: List[Tuple[str, str]] = []
+
+    if raw_credentials:
+        for raw_item in raw_credentials.split(";"):
+            item = raw_item.strip()
+            if not item:
+                continue
+            if ":" in item:
+                email, api_key = item.split(":", 1)
+            else:
+                email, api_key = item, ""
+            credentials.append((email.strip(), api_key.strip()))
+
+    if not credentials:
+        email = env_vars.get("OPENALEX_EMAIL", "").strip()
+        api_key = env_vars.get("OPENALEX_API_KEY", "").strip()
+        if email or api_key:
+            credentials.append((email, api_key))
+
+    return credentials
+
+
+DEFAULT_OPENALEX_CREDENTIALS: List[Tuple[str, str]] = load_openalex_credentials()
 
 
 @dataclass(frozen=True)

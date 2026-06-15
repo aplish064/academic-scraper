@@ -30,6 +30,9 @@ ENV/
 .DS_Store
 Thumbs.db
 .worktrees/
+.env
+.env.*
+!.env.example
 
 data/
 temp/

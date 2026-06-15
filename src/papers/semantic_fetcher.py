@@ -49,17 +49,36 @@ from tqdm import tqdm
 # 获取脚本所在目录的绝对路径
 SCRIPT_DIR = Path(__file__).parent.parent.parent.absolute()
 
+
+def _load_env_file() -> None:
+    env_path = SCRIPT_DIR / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env_file()
+
 # ============ 配置参数 ============
-API_KEY = "7Tts2u4jXLaebjvFPICkE7kpTJQvUaYG4byRSpBp"
+API_KEY = os.getenv("SEMANTIC_API_KEY", "").strip()
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 
 # ClickHouse 配置
-CH_HOST = 'localhost'
-CH_PORT = 8123
-CH_DATABASE = 'academic_db'
+CH_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+CH_PORT = int(os.getenv("CLICKHOUSE_PORT", "8123"))
+CH_DATABASE = os.getenv("CLICKHOUSE_DATABASE", "academic_db")
 CH_TABLE = 'semantic'
-CH_USERNAME = 'default'
-CH_PASSWORD = ''
+CH_USERNAME = os.getenv("CLICKHOUSE_USER", "default")
+CH_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
 
 # CSV 配置
 CSV_PATH = SCRIPT_DIR / "data/XR2026-UTF8.csv"
@@ -97,10 +116,9 @@ ERROR_LOG_FILE = LOG_DIR / "journal_errors.log"
 LEGACY_PROGRESS_FILE = LEGACY_LOG_DIR / "journal_progress.json"
 
 # ============ 全局变量 ============
-headers = {
-    "x-api-key": API_KEY,
-    "Content-Type": "application/json"
-}
+headers = {"Content-Type": "application/json"}
+if API_KEY:
+    headers["x-api-key"] = API_KEY
 
 
 def _parse_int(value: Any, *, default: int, minimum: int = 1) -> int:
