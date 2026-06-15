@@ -34,9 +34,10 @@ PAPER_FIELDS = ",".join(
 AUTHOR_FIELDS = ",".join(
     [
         "authorId",
-        "name",
-        "aliases",
+        "externalIds",
         "url",
+        "name",
+        "affiliations",
         "homepage",
         "paperCount",
         "citationCount",

@@ -296,7 +296,12 @@ def test_semantic_scholar_client_gets_author_with_papers():
 
     args, kwargs = session.get_calls[0]
     assert args[0] == "https://api.semanticscholar.org/graph/v1/author/S2A1"
-    assert "hIndex" in kwargs["params"]["fields"]
+    fields = kwargs["params"]["fields"].split(",")
+    assert "hIndex" in fields
+    assert "aliases" not in fields
+    assert "authorId" in fields
+    assert "externalIds" in fields
+    assert "affiliations" in fields
 
 
 def test_semantic_scholar_client_returns_empty_for_blank_inputs_without_http():
