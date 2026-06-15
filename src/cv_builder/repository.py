@@ -248,6 +248,8 @@ def _clean_text(value) -> str:
 
 
 def _default_for_clickhouse_type(column_type: str):
+    if column_type.startswith("Nullable("):
+        return None
     if column_type.startswith("DateTime"):
         return datetime.now()
     if column_type.startswith("UInt"):
