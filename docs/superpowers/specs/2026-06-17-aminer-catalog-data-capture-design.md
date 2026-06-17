@@ -29,6 +29,7 @@ The first implementation should support broad AMiner coverage through topic shar
 - Do not store full authenticated browser HTML, full visible text, screenshots, cookies, local storage, or session storage.
 - Do not automate login credentials or bypass AMiner access controls.
 - Do not auto-fetch profiles for name-only authors without an AMiner ID in the first version.
+- Do not enable live ClickHouse data writes until the 20-person CSV review gate has passed.
 
 ## Existing References
 
@@ -611,6 +612,43 @@ The audit chain must remain queryable:
 catalog -> shard -> topic_group -> topic -> paper -> author -> aminer_person_id -> profile responses
 ```
 
+## CSV Review Gate Before ClickHouse Writes
+
+Before implementing or enabling live ClickHouse writes for AMiner captured data, the implementation must support a review-only CSV preview mode.
+
+The review gate is mandatory:
+
+1. Run a fixed instance capture for 20 AMiner people.
+2. Produce CSV files with the same table shapes, field names, normalization rules, and row-building rules intended for ClickHouse insertion.
+3. Store the CSV files under `output/aminer_builder_review/<run_id>/`.
+4. Stop and ask the user to review the CSV files.
+5. Only after explicit user approval may implementation proceed to live ClickHouse insert behavior.
+
+Required CSV files:
+
+```text
+aminer_raw_responses.csv
+aminer_recalled_paper_observations.csv
+aminer_paper_author_observations.csv
+aminer_person_observations.csv
+aminer_publication_observations.csv
+aminer_profile_fact_observations.csv
+aminer_person_fetch_queue.csv
+aminer_run_coverage_reports.csv
+```
+
+The CSV exporter must use the same schema column order as `schema.py`. For list, dict, and nested payload fields, use JSON strings exactly as the ClickHouse writer would insert them. Nullable fields should be empty in CSV when the ClickHouse row would use `NULL`.
+
+The 20-person review instance should use a bounded, fixed input:
+
+```text
+source: catalog pilot or fixed fixture-backed person queue
+people: first 20 distinct queued AMiner person IDs
+profile depth: full-with-browser when local authenticated browser state exists; otherwise full public profile plus browser fixture parsing
+```
+
+If live AMiner access is unavailable, the implementation must still generate the CSV review package from deterministic fixtures, and clearly mark the package as fixture-backed. Live ClickHouse inserts remain blocked until the user approves either the live or fixture-backed CSV package.
+
 ## Person Profile Flow
 
 For each pending person:
@@ -826,18 +864,25 @@ Required instance tests:
    - Seed: a tiny catalog with one shard, one topic group, one topic, and a small process count.
    - Expected: run summary reports topic, paper, author, profile, and fact coverage.
 
+6. Pre-ClickHouse CSV review instance:
+   - Seed: exactly 20 distinct AMiner people from the fixed pilot run or deterministic fixtures.
+   - Expected: CSV files under `output/aminer_builder_review/<run_id>/` with headers matching the target ClickHouse table columns and rows serialized with the same values that would be inserted into ClickHouse.
+   - Gate: stop after producing the CSV package and obtain user approval before enabling live ClickHouse writes.
+
 Instance test results should be summarized in the design or implementation PR description so reviewers can see both mocked behavior and real-data behavior.
 
 ## Rollout Plan
 
 1. Create schema and config loading with mock tests.
 2. Implement rec5 recall and raw/paper/author observation storage.
-3. Implement person queue and public profile fetch.
-4. Implement browser parsed snapshot fetch with strict raw policy.
-5. Implement catalog/shard/topic-group orchestration.
-6. Add coverage reports and stale recovery.
-7. Run mock tests and fixed instance tests.
-8. Stop before normalized `academic_cv` integration; design that separately.
+3. Implement CSV preview row builders and the 20-person review package.
+4. Run the 20-person CSV instance test and stop for user review before enabling ClickHouse writes.
+5. Implement person queue and public profile fetch with ClickHouse writes only after review approval.
+6. Implement browser parsed snapshot fetch with strict raw policy.
+7. Implement catalog/shard/topic-group orchestration.
+8. Add coverage reports and stale recovery.
+9. Run mock tests and fixed instance tests.
+10. Stop before normalized `academic_cv` integration; design that separately.
 
 ## ClickHouse Engine Defaults
 
